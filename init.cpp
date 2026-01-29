@@ -379,6 +379,7 @@ bool CMyApp::OnInit2()
             "  -connect=<ip>   \t  " + _("Connect only to the specified node\n") +
             "  -server         \t  " + _("Accept command line and JSON-RPC commands\n") +
             "  -daemon         \t  " + _("Run in the background as a daemon and accept commands\n") +
+            "  -irc            \t  " + _("Enable IRC peer discovery (disabled by default)\n") +
             "  -recover        \t  " + _("Recover database and extract keys from corrupted wallet\n") +
             "  --help          \t  " + _("This help message\n");
 
@@ -600,6 +601,10 @@ bool CMyApp::OnInit2()
     fTestMode = GetBoolArg("-testmode");
     if (fTestMode)
         printf("TEST MODE enabled - no peer connections, minimum difficulty\n");
+
+    fUseIRC = GetBoolArg("-irc");
+    if (fUseIRC)
+        printf("IRC peer discovery enabled\n");
 
     if (mapArgs.count("-genproclimit"))
     {
@@ -853,6 +858,7 @@ bool AppInit(int argc, char* argv[])
             "  -connect=<ip>     " + _("Connect only to the specified node\n") +
             "  -server           " + _("Accept command line and JSON-RPC commands\n") +
             "  -daemon           " + _("Run in the background as a daemon and accept commands\n") +
+            "  -irc              " + _("Enable IRC peer discovery (disabled by default)\n") +
             "  -recover          " + _("Recover database and extract keys from corrupted wallet\n") +
             "  --help            " + _("This help message\n");
         fprintf(stderr, "%s", strUsage.c_str());
@@ -920,6 +926,10 @@ bool AppInit(int argc, char* argv[])
     fTestMode = GetBoolArg("-testmode");
     if (fTestMode)
         printf("TEST MODE enabled - no peer connections, minimum difficulty\n");
+
+    fUseIRC = GetBoolArg("-irc");
+    if (fUseIRC)
+        printf("IRC peer discovery enabled\n");
 
     if (mapArgs.count("-genproclimit"))
     {

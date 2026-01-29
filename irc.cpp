@@ -5,6 +5,7 @@
 #include "headers.h"
 
 int nGotIRCAddresses = 0;
+bool fUseIRC = false;
 
 
 
@@ -157,6 +158,12 @@ void ThreadIRCSeed(void* parg)
 {
     printf("ThreadIRCSeed started\n");
 
+    if (!fUseIRC)
+    {
+        printf("ThreadIRCSeed: IRC disabled (use -irc to enable)\n");
+        return;
+    }
+
     if (fTestMode)
     {
         printf("ThreadIRCSeed: TEST MODE - skipping IRC bootstrap\n");
@@ -166,6 +173,7 @@ void ThreadIRCSeed(void* parg)
     int nErrorWait = 10;
     int nRetryWait = 10;
     bool fNameInUse = false;
+    string strRandomName = strprintf("x%u", GetRand(0xFFFFFFFF));
     bool fTOR = (fUseProxy && addrProxy.port == htons(9050));
 
     while (!fShutdown)
@@ -181,9 +189,10 @@ void ThreadIRCSeed(void* parg)
         }
 
         SOCKET hSocket;
+        printf("[IRC] Connecting to irc.lfnet.org:6667...\n");
         if (!ConnectSocket(addrConnect, hSocket))
         {
-            printf("IRC connect failed\n");
+            printf("[IRC] Connect failed\n");
             nErrorWait = nErrorWait * 11 / 10;
             if (Wait(nErrorWait += 60))
                 continue;
@@ -206,7 +215,7 @@ void ThreadIRCSeed(void* parg)
         if (addrLocalHost.IsRoutable() && !fUseProxy && !fNameInUse)
             strMyName = EncodeAddress(addrLocalHost);
         else
-            strMyName = strprintf("x%u", GetRand(1000000000));
+            strMyName = strRandomName;
 
         Send(hSocket, strprintf("NICK %s\r", strMyName.c_str()).c_str());
         Send(hSocket, strprintf("USER %s 8 * : %s\r", strMyName.c_str(), strMyName.c_str()).c_str());
@@ -219,6 +228,8 @@ void ThreadIRCSeed(void* parg)
             if (nRet == 2)
             {
                 printf("IRC name already in use\n");
+                if (fNameInUse)
+                    strRandomName = strprintf("x%u", GetRand(0xFFFFFFFF));
                 fNameInUse = true;
                 Wait(10);
                 continue;
@@ -229,11 +240,14 @@ void ThreadIRCSeed(void* parg)
             else
                 return;
         }
+
+        printf("[IRC] Connected to irc.lfnet.org as %s\n", strMyName.c_str());
         Sleep(500);
 
         // Bitok: Use our own IRC channel for peer discovery
         Send(hSocket, "JOIN #findsatoshi\r");
         Send(hSocket, "WHO #findsatoshi\r");
+        printf("[IRC] Joined #findsatoshi, waiting for peers...\n");
 
         int64 nStart = GetTime();
         string strLine;
@@ -272,11 +286,12 @@ void ThreadIRCSeed(void* parg)
                 {
                     addr.nTime = GetAdjustedTime() - 51 * 60;
                     if (AddAddress(addr))
-                        printf("IRC got new address: %s\n", addr.ToString().c_str());
+                        printf("[IRC] Got new address: %s\n", addr.ToString().c_str());
                     nGotIRCAddresses++;
                 }
             }
         }
+        printf("[IRC] Disconnected (got %d addresses this session)\n", nGotIRCAddresses);
         closesocket(hSocket);
         hSocket = INVALID_SOCKET;
 
