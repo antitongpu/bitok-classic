@@ -1,116 +1,181 @@
-# Bitok Manifesto
+# BITOK Manifesto
 
-## The Short Version
+## Bitcoin After 0.3.19
 
-I took Bitcoin v0.3.19, changed the mining algorithm so GPUs can't dominate, gave it a new genesis block, and ran it.
-
-That's the manifesto. You can stop reading here.
+Notes on What Changed, and Why BITOK Continues from There
 
 ---
 
-## The Longer Version (for those who enjoy reading)
+People sometimes ask what "Bitcoin was supposed to be."
 
-### What Happened to Bitcoin
+That question usually comes up long after the original design constraints have been forgotten. Bitcoin was not designed as a finished product. It was designed as a working system that could be adjusted once it was running in the real world.
 
-Bitcoin worked in 2010. You downloaded the software, clicked "Generate Coins," and your laptop found blocks. The network grew because participation was free and easy.
+Version 0.3.19 was the last release where Satoshi was still directly involved. By that point, Bitcoin had real users, real attacks, and real tradeoffs. The system was already working, but it was still early.
 
-Then GPUs happened. Then mining pools. Then FPGAs, ASICs. Then halvings made the reward small enough that only industrial operations made economic sense.
+BITOK starts from that point.
 
-The barrier to entry went from "own a computer" to "have access to cheap electricity and specialized hardware." Most people stopped mining. Many never started.
+---
 
-This was not a conspiracy. It was economics. SHA-256 happens to be very fast on parallel hardware. Someone was always going to optimize it.
+## On Limits (Block Size, Script, Policy)
 
-### What Satoshi Said About It
+Many limits in Bitcoin were added for safety, not ideology.
 
-December 12, 2010:
+### Block Size
 
-> We should have a gentleman's agreement to postpone the GPU arms race as long as we can for the good of the network. It's much easier to get new users up to speed if they don't have to worry about GPU drivers and compatibility. It's nice how anyone with just a CPU can compete fairly equally right now.
+The 1 MB block size limit was introduced to prevent denial-of-service attacks while the network was small. It was not meant to be permanent.
 
-To Laszlo Hanyecz (the pizza guy):
+Satoshi explained this clearly at the time:
 
-> GPUs are much less evenly distributed, so the generated coins only go towards rewarding 20% of the people for joining the network instead of 100%.
+> "It can be phased in, like:
+> if (blocknumber > 115000) maxblocksize = largerlimit.
+> It can start being in versions way ahead, so by the time it becomes an issue, the older versions are already obsolete."
+
+The idea was simple: when usage approaches the limit and hardware has improved, the limit can be raised. Old software upgrades. This is normal engineering.
+
+Here is the relevant code style from that era (simplified):
+
+```cpp
+// Temporary anti-DoS block size limit
+if (nBlockSize > MAX_BLOCK_SIZE)
+    return error("block too large");
+```
+
+This was a guardrail, not a constitution.
+
+BITOK treats block size the same way: as a parameter that exists to protect the network, not to freeze it forever.
+
+### Script and Opcodes
+
+Bitcoin Script was designed to be deliberately limited. It is not Turing complete. That was intentional. At the same time, it was not meant to be useless.
+
+Early versions included more operations than are commonly usable today, including bitwise and splice operations. Some were disabled later because they were risky in an immature network.
+
+For example, early Script defined operations such as:
+
+```
+OP_CAT
+OP_SUBSTR
+OP_LEFT
+OP_RIGHT
+OP_AND
+OP_OR
+OP_XOR
+OP_INVERT
+```
+
+These were disabled because they made it easier to create scripts that consumed excessive resources or crashed nodes. Disabling them was a safety decision, not a statement that Script should never evolve.
+
+Script was meant to be simple, bounded, and expandable when safe.
+
+BITOK preserves this posture. It does not assume that "disabled once" means "forbidden forever." It assumes that safety comes from careful limits, not from permanent paralysis.
+
+---
+
+## On Fees
+
+Transaction fees were added to prevent spam, not to require payment for every transaction.
+
+Satoshi said this directly:
+
+> "There is no need to require a fee for every transaction."
+
+In early Bitcoin, transactions could be relayed and mined without fees if blocks were not full. Priority was determined by age and size, not bidding wars.
+
+The relevant logic looked like this:
+
+```cpp
+// Allow free transactions if they are small and old enough
+if (tx.nFee < MIN_TX_FEE && priority < COIN * 144 / 250)
+    return error("insufficient priority");
+```
+
+Fees were meant to become relevant only when necessary.
+
+BITOK keeps fees optional by design. With low congestion and simple relay rules, fees return to their original purpose: spam resistance, not gatekeeping.
+
+---
+
+## On Transaction Replacement
+
+One thing Satoshi explicitly did not want was transaction replacement.
+
+> "We should not allow replacing transactions. That would make transactions unreliable."
+
+Once a transaction is broadcast, users should be able to rely on it either confirming or failing cleanly. If transactions can be replaced freely, the system becomes harder to reason about, especially for merchants.
+
+BITOK keeps the earlier assumption intact: broadcasting a transaction is a commitment, not the first move in a negotiation.
+
+---
+
+## On Relay and Mempool Policy
+
+Early Bitcoin nodes relayed valid transactions with minimal filtering. The idea was that consensus rules define validity, not a growing list of local policies.
+
+Satoshi cautioned against over-engineering rules:
+
+> "You don't need to have rules for every scenario."
+
+Over time, modern Bitcoin implementations added many non-consensus relay rules: ancestor limits, fee-based eviction, replacement logic, and package policies. These are not consensus rules, but they strongly shape network behavior.
+
+BITOK keeps relay behavior closer to validity-first principles. If a transaction is valid and safe to process, it should propagate.
+
+---
+
+## On Mining and Participation
+
+Mining was originally designed to be accessible.
+
+> "It's nice that anyone with a CPU can mine."
+
+This was not about performance. It was about participation. A system where many people can contribute hash power is easier to understand, easier to join, and harder to ossify socially.
+
+Satoshi knew GPU mining would eventually dominate SHA-256:
+
+> "We should have a gentleman's agreement to postpone the GPU arms race as long as we can for the good of the network. It's much easier to get new users up to speed if they don't have to worry about GPU drivers and compatibility."
 
 And:
 
-> It's inevitable that GPU compute clusters will eventually hog all the generated coins, but I don't want to hasten that day.
+> "GPUs are much less evenly distributed, so the generated coins only go towards rewarding 20% of the people for joining the network instead of 100%."
 
-He knew. He just didn't have a solution at the time.
+He understood the problem. He just didn't have a solution at the time.
 
-### Memory-Hard Algorithms
+BITOK uses Yespower, a CPU-friendly proof-of-work, to keep mining approachable. This matches the early assumptions better than an ecosystem dominated by specialized hardware and large pools.
 
-In 2010, nobody had figured out memory-hard proof-of-work yet. Colin Percival published scrypt in 2009, but it wasn't designed for PoW and had some issues at high parameters.
+---
 
-By 2019, Alexander Peslyak (Solar Designer) had refined the concept into Yespower - a memory-hard algorithm specifically designed to resist GPU and ASIC optimization while remaining efficient on CPUs.
+## On Usefulness
 
-The idea is simple: if every hash requires ~128KB of random memory access, GPUs lose their parallelism advantage. A GPU has thousands of cores but limited memory bandwidth per core. A CPU has fewer cores but can feed each one efficiently.
+The title of the paper was:
 
-### What Bitok Changes
+> "Bitcoin: A Peer-to-Peer Electronic Cash System"
 
-Three things:
+That does not mean Bitcoin cannot also be a store of value. It means that usefulness in everyday transactions was a core design goal.
 
-1. **Yespower instead of SHA-256.** GPU miners don't get 1000x advantage anymore. More like 2x, if that. Not worth the driver headaches.
+Small payments, experimentation, and direct use were expected to happen on-chain, especially while the system was young.
 
-2. **New genesis block.** Separate network. No confusion with BTC. No replay attacks. Clean slate.
+BITOK continues with that expectation.
 
-3. **Modern build system.** The original code needed patches to compile on anything newer than Ubuntu 10.04. Now it builds on Ubuntu 24.04, macOS, Windows.
+---
 
-Everything else is exactly as Satoshi left it. Same 21 million cap. Same 10 minute blocks. Same halving schedule. Same transaction format. Same script system. Same wallet behavior.
+## Why BITOK Exists
 
-### What Bitok Does Not Change
+BITOK is not an attempt to "fix" Bitcoin.
 
-- No new opcodes
-- No SegWit
-- No block size increase
-- No layer 2
-- No BIPs
-- No governance
-- No foundation
-- No roadmap
-- No improvement proposals
+It is an attempt to continue it from a specific point in time: Bitcoin 0.3.19, when the system was live, the assumptions were explicit, and the future was still open.
 
-The protocol is frozen at December 2010. If you think Bitcoin needed all those changes to succeed, this probably isn't for you.
+Many modern changes improved security and robustness. Some also turned temporary decisions into permanent doctrine.
 
-### Why
+BITOK keeps the original engineering attitude:
 
-I wanted to mine Bitcoin with my laptop. Not buy ASICs. Not join pools. Not pay for cloud hashrate.
+- limits are tools
+- safety matters
+- participation matters
+- usefulness matters
+- nothing is sacred except the rules that make the system work
 
-I couldn't, because of physics and economics.
+Bitcoin was never meant to be finished in 2010.
 
-So I made this instead.
-
-### The Philosophy Part (if you want one)
-
-Bitcoin's whitepaper is 9 pages. Most of it is math. Satoshi didn't write manifestos. He wrote code that worked and let people figure out what it meant.
-
-The code said: anyone can transact. Anyone can mine. No intermediaries. No permission.
-
-Somewhere along the way, "anyone can mine" became "anyone with industrial-scale infrastructure can mine." That happened gradually and probably inevitably.
-
-Bitok is an experiment in what Bitcoin would look like if the mining algorithm had been different from the start. Nothing more profound than that.
-
-### Who Is Tom Elvis Jedusor
-
-An anagram. A Harry Potter reference. A pseudonym.
-
-Why does it matter?
-
-### Will This Succeed
-
-Define "succeed."
-
-If you mean: will the software compile and run? Yes. I tested it.
-
-If you mean: will people use it? Some might. Most won't. That's fine.
-
-If you mean: will it be worth money? I genuinely don't know. Probably not much. Markets are weird and I don't predict them.
-
-If you mean: will it stay decentralized? That depends on whether enough people run nodes. I can't control that. Neither can you. That's the point.
-
-### No Promises
-
-I'm not going to tell you this will change the world. I'm not going to tell you to buy it. I'm not going to tell you anything you want to hear just because it sounds good.
-
-Here's software. It does what it says. Run it or don't.
+BITOK exists to continue the work from there.
 
 ---
 
@@ -121,7 +186,7 @@ Algorithm:          Yespower 1.0 (N=2048, r=32)
 Block time:         10 minutes
 Block reward:       50 BITOK (halves every 210,000 blocks)
 Max supply:         21,000,000 BITOK
-Difficulty adjust:  every 2016 blocks
+Difficulty adjust:  Every 2016 blocks
 Coinbase maturity:  100 blocks
 P2P port:           18333
 RPC port:           8332
@@ -136,11 +201,16 @@ All security fixes from Bitcoin v0.3.19 are present:
 - DoS limits
 - IsStandard() transaction filtering
 
-Bitcoin forked once in August 2010 to fix the overflow bug. Bitok launches with all fixes in place. No forks needed.
+Bitcoin forked once in August 2010 to fix the overflow bug. BITOK launches with all fixes in place. No forks needed.
 
-## Source
+---
 
-https://github.com/elvisjedusor/bitok
+## Closing Note
+
+Software that never changes dies.
+Software that cannot be changed thoughtfully becomes a monument.
+
+BITOK is an experiment in continuing Bitcoin as a living system, using the same cautious, practical mindset that built it in the first place.
 
 ---
 
