@@ -16,9 +16,10 @@ Version: Bitok 0.3.19 Mainnet
 6. [Mining Operations](#mining-operations)
 7. [Network Operations](#network-operations)
 8. [Block Chain Operations](#block-chain-operations)
-9. [Integration Examples](#integration-examples)
-10. [Error Handling](#error-handling)
-11. [Security Best Practices](#security-best-practices)
+9. [SPV Client Operations](#spv-client-operations)
+10. [Integration Examples](#integration-examples)
+11. [Error Handling](#error-handling)
+12. [Security Best Practices](#security-best-practices)
 
 ---
 
@@ -726,6 +727,84 @@ def get_spendable_balance(rpc, min_conf=6):
     utxos = rpc.call('listunspent', [min_conf])
     return sum(utxo['amount'] for utxo in utxos)
 ```
+
+### dumpprivkey
+
+Exports the private key for a given Bitok address in Wallet Import Format (WIF).
+
+**Parameters:**
+- `address` (string, required) - The Bitok address whose private key to export
+
+**Returns:** String (WIF-encoded private key)
+
+**Example:**
+```bash
+./bitokd dumpprivkey "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+```
+
+**Response:**
+```
+"5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ"
+```
+
+**Use Case - Wallet Backup / Migration:**
+```python
+def backup_private_keys(rpc, addresses):
+    """Export private keys for backup"""
+    keys = {}
+    for address in addresses:
+        try:
+            wif = rpc.call('dumpprivkey', [address])
+            keys[address] = wif
+        except Exception as e:
+            print(f"Cannot export key for {address}: {e}")
+    return keys
+```
+
+**Security Warning:** Private keys grant full control over funds. Store exported keys offline in a secure location. Never share them or transmit them over unencrypted channels.
+
+---
+
+### importprivkey
+
+Imports a WIF-encoded private key into the wallet.
+
+**Parameters:**
+- `privkey` (string, required) - The WIF-encoded private key (as returned by `dumpprivkey`)
+- `label` (string, optional) - Label to assign to the imported address
+
+**Returns:** String (the Bitok address corresponding to the imported key)
+
+**Example:**
+```bash
+./bitokd importprivkey "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ"
+./bitokd importprivkey "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ" "imported_savings"
+```
+
+**Response:**
+```
+"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+```
+
+**Use Case - Wallet Migration:**
+```python
+def import_keys_from_backup(rpc, key_backup):
+    """Import private keys from a backup"""
+    imported = []
+    for label, wif in key_backup.items():
+        try:
+            address = rpc.call('importprivkey', [wif, label])
+            imported.append(address)
+            print(f"Imported {address} ({label})")
+        except Exception as e:
+            print(f"Failed to import key for {label}: {e}")
+    return imported
+```
+
+**Important Notes:**
+- The WIF key must start with version byte 0x80 (128 decimal)
+- After importing, the wallet contains the key immediately and can spend funds associated with it
+- Use a descriptive label so you can identify the imported address later
 
 ---
 
@@ -1686,6 +1765,213 @@ Validates a Bitok address and returns information about it.
 
 ---
 
+## SPV Client Operations
+
+These RPC commands support SPV (Simplified Payment Verification) client operations. They allow lightweight clients to verify block headers, broadcast transactions, and obtain Merkle proofs without downloading the full blockchain. See `SPV_CLIENT.md` for the full SPV protocol specification.
+
+### getblockheader
+
+Returns header information for a specific block without downloading full block data.
+
+**Parameters:**
+- `hash` (string, required) - 64-character hexadecimal block hash
+
+**Returns:** Object containing:
+- `hash` (string) - Block hash
+- `version` (number) - Block version
+- `previousblockhash` (string) - Hash of previous block
+- `merkleroot` (string) - Merkle root of transactions
+- `time` (number) - Block timestamp (Unix epoch)
+- `bits` (number) - Compact difficulty target
+- `nonce` (number) - Nonce used for proof-of-work
+- `height` (number) - Block height in chain
+- `confirmations` (number) - Number of confirmations
+- `nextblockhash` (string, optional) - Hash of next block (if exists)
+- `hex` (string) - Raw 80-byte block header in hex encoding
+
+**Example:**
+```bash
+./bitokd getblockheader "000007a5d9c7b6e7b8c9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1"
+```
+
+**Response:**
+```json
+{
+  "hash": "000007a5d9c7b6e7b8c9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1",
+  "version": 1,
+  "previousblockhash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
+  "time": 1231006505,
+  "bits": 486604799,
+  "nonce": 2083236893,
+  "height": 0,
+  "confirmations": 12450,
+  "hex": "01000000000000000000..."
+}
+```
+
+**Use Case - SPV Header Chain Sync (via trusted node):**
+```python
+def sync_headers_via_rpc(rpc, start_height, end_height):
+    """Download and store headers from a trusted full node"""
+    headers = []
+    for height in range(start_height, end_height + 1):
+        block_hash = rpc.call('getblockhash', [height])
+        header = rpc.call('getblockheader', [block_hash])
+        headers.append({
+            'height': header['height'],
+            'hash': header['hash'],
+            'prev': header['previousblockhash'],
+            'merkle_root': header['merkleroot'],
+            'time': header['time'],
+            'bits': header['bits'],
+            'nonce': header['nonce'],
+            'hex': header['hex']
+        })
+    return headers
+```
+
+**Difference from `getblock`:** `getblockheader` returns only the 80-byte header data and metadata, while `getblock` returns the full block including all transaction hashes. Use `getblockheader` when you only need to verify the chain without transaction details.
+
+---
+
+### sendrawtransaction
+
+Broadcasts a raw signed transaction to the network. Essential for SPV clients that construct and sign transactions locally.
+
+**Parameters:**
+- `hex` (string, required) - Hex-encoded serialized transaction
+
+**Returns:** String (transaction hash / txid)
+
+**Example:**
+```bash
+./bitokd sendrawtransaction "0100000001abcdef..."
+```
+
+**Response:**
+```
+"a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+```
+
+**Use Case - SPV Client Transaction Broadcast:**
+```python
+def broadcast_transaction(rpc, signed_tx_hex):
+    """Broadcast a locally-signed transaction"""
+    try:
+        txid = rpc.call('sendrawtransaction', [signed_tx_hex])
+        return {'success': True, 'txid': txid}
+    except Exception as e:
+        error_msg = str(e)
+        if 'Missing inputs' in error_msg:
+            return {'success': False, 'error': 'Referenced inputs do not exist or are already spent'}
+        return {'success': False, 'error': error_msg}
+```
+
+**Important Notes:**
+- The transaction must be fully signed and valid
+- If the transaction references inputs that don't exist or are already spent, it will be rejected with "Missing inputs"
+- If the transaction is already in the mempool or blockchain, the txid is returned without error (idempotent)
+- The transaction is relayed to all connected peers after acceptance
+
+---
+
+### gettxoutproof
+
+Returns a hex-encoded Merkle proof that a transaction was included in a block.
+
+**Parameters:**
+- `txid` (string, required) - Transaction hash to prove
+- `blockhash` (string, optional) - Specific block to look in (if omitted, searches the wallet and transaction index)
+
+**Returns:** String (hex-encoded CMerkleBlock containing the block header and partial Merkle tree)
+
+**Example:**
+```bash
+./bitokd gettxoutproof "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+./bitokd gettxoutproof "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd" "000007a5..."
+```
+
+**Response:**
+```
+"0100000000000000...merkle_proof_data..."
+```
+
+**Use Case - SPV Payment Verification:**
+```python
+def get_payment_proof(rpc, txid, block_hash=None):
+    """Get Merkle proof for a transaction"""
+    params = [txid]
+    if block_hash:
+        params.append(block_hash)
+
+    proof_hex = rpc.call('gettxoutproof', params)
+    return proof_hex
+
+def verify_payment(rpc, txid):
+    """Full payment verification flow"""
+    proof = get_payment_proof(rpc, txid)
+    verified_txids = rpc.call('verifytxoutproof', [proof])
+
+    if txid in [t.lower() for t in verified_txids]:
+        return {'verified': True, 'proof': proof}
+    return {'verified': False}
+```
+
+**Important Notes:**
+- If `blockhash` is not provided, the node first checks the wallet, then the transaction index to find which block contains the transaction
+- The proof can be passed to `verifytxoutproof` on any node to independently verify inclusion
+- This is the RPC equivalent of the P2P `merkleblock` message
+
+---
+
+### verifytxoutproof
+
+Verifies a Merkle proof and returns the transaction IDs it commits to.
+
+**Parameters:**
+- `proof` (string, required) - Hex-encoded proof from `gettxoutproof`
+
+**Returns:** Array of transaction ID strings that the proof validates, or empty array if invalid
+
+**Example:**
+```bash
+./bitokd verifytxoutproof "0100000000000000...merkle_proof_data..."
+```
+
+**Response (valid proof):**
+```json
+[
+  "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+]
+```
+
+**Response (invalid proof):**
+```json
+[]
+```
+
+**Use Case - Cross-Node Payment Verification:**
+```python
+def verify_payment_independently(rpc_node_a, rpc_node_b, txid):
+    """Verify a payment using proof from one node, verified on another"""
+    # Get proof from node A
+    proof = rpc_node_a.call('gettxoutproof', [txid])
+
+    # Verify on node B (independent verification)
+    verified = rpc_node_b.call('verifytxoutproof', [proof])
+
+    return txid in verified
+```
+
+**Verification checks performed:**
+1. The partial Merkle tree is reconstructed from the proof data
+2. The reconstructed Merkle root must match the block header's `hashMerkleRoot`
+3. The block must exist in the node's main chain
+4. If any check fails, an empty array is returned
+
+---
+
 ## Integration Examples
 
 ### Exchange Deposit System
@@ -2024,7 +2310,10 @@ The RPC interface returns HTTP status codes and JSON-RPC errors:
 | Invalid address | Malformed address | Validate address format |
 | Insufficient funds | Not enough balance | Check balance before sending |
 | Invalid amount | Amount out of range | Use 0.01 to 21000000 |
-| Wallet locked | Wallet encrypted | Unlock wallet (not in v0.3.0) |
+| Private key not known | Address not in wallet | Can only export keys for addresses owned by this wallet |
+| TX decode failed | Malformed transaction | Verify hex encoding of raw transaction |
+| Missing inputs | UTXO not found or spent | Referenced transaction outputs do not exist |
+| Transaction not found in any block | Unconfirmed tx | Wait for confirmation or specify blockhash |
 
 ### Error Handling Example
 
@@ -2270,6 +2559,8 @@ def send_with_logging(rpc, address, amount, user_id):
 | setlabel | Wallet | Set address label |
 | getlabel | Wallet | Get address label |
 | getaddressesbylabel | Wallet | Get addresses by label |
+| dumpprivkey | Wallet | Export private key in WIF format |
+| importprivkey | Wallet | Import WIF-encoded private key |
 | sendtoaddress | Transaction | Send coins |
 | listtransactions | Transaction | List recent transactions |
 | listunspent | Wallet | List unspent transaction outputs (UTXOs) |
@@ -2277,6 +2568,10 @@ def send_with_logging(rpc, address, amount, user_id):
 | getreceivedbylabel | Wallet | Get amount received by label |
 | listreceivedbyaddress | Wallet | List received by address |
 | listreceivedbylabel | Wallet | List received by label |
+| getblockheader | SPV | Get block header data by hash |
+| sendrawtransaction | SPV | Broadcast raw signed transaction |
+| gettxoutproof | SPV | Get Merkle proof of transaction inclusion |
+| verifytxoutproof | SPV | Verify a Merkle proof |
 
 ### Version History
 

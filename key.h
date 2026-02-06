@@ -117,6 +117,46 @@ public:
         return vchPrivKey;
     }
 
+    bool SetSecret(const vector<unsigned char>& vchSecret)
+    {
+        if (vchSecret.size() != 32)
+            return false;
+        BIGNUM *bn = BN_bin2bn(&vchSecret[0], 32, BN_new());
+        if (bn == NULL)
+            return false;
+        if (!EC_KEY_set_private_key(pkey, bn))
+        {
+            BN_free(bn);
+            return false;
+        }
+        const EC_GROUP *group = EC_KEY_get0_group(pkey);
+        EC_POINT *pub_key = EC_POINT_new(group);
+        if (!EC_POINT_mul(group, pub_key, EC_KEY_get0_private_key(pkey), NULL, NULL, NULL))
+        {
+            EC_POINT_free(pub_key);
+            BN_free(bn);
+            return false;
+        }
+        EC_KEY_set_public_key(pkey, pub_key);
+        EC_POINT_free(pub_key);
+        BN_free(bn);
+        fSet = true;
+        return true;
+    }
+
+    vector<unsigned char> GetSecret() const
+    {
+        const BIGNUM *bn = EC_KEY_get0_private_key(pkey);
+        if (bn == NULL)
+            throw key_error("CKey::GetSecret() : EC_KEY_get0_private_key failed");
+        int nBytes = BN_num_bytes(bn);
+        vector<unsigned char> vchSecret(32, 0);
+        int n = BN_bn2bin(bn, &vchSecret[32 - nBytes]);
+        if (n != nBytes)
+            throw key_error("CKey::GetSecret() : BN_bn2bin failed");
+        return vchSecret;
+    }
+
     bool SetPubKey(const vector<unsigned char>& vchPubKey)
     {
         const unsigned char* pbegin = &vchPubKey[0];

@@ -1670,6 +1670,73 @@ Value verifytxoutproof(const Array& params, bool fHelp)
 }
 
 
+Value dumpprivkey(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "dumpprivkey <bitokaddress>\n"
+            "Reveals the private key corresponding to <bitokaddress>.");
+
+    string strAddress = params[0].get_str();
+    uint160 hash160;
+    if (!AddressToHash160(strAddress, hash160))
+        throw runtime_error("Invalid Bitok address");
+
+    CKey key;
+    CRITICAL_BLOCK(cs_mapKeys)
+    {
+        if (!mapPubKeys.count(hash160))
+            throw runtime_error("Private key for address " + strAddress + " is not known");
+        vector<unsigned char> vchPubKey = mapPubKeys[hash160];
+        if (!mapKeys.count(vchPubKey))
+            throw runtime_error("Private key for address " + strAddress + " is not known");
+        if (!key.SetPrivKey(mapKeys[vchPubKey]))
+            throw runtime_error("Failed to read private key");
+    }
+
+    vector<unsigned char> vchSecret = key.GetSecret();
+    vector<unsigned char> vchWIF;
+    vchWIF.push_back(128);
+    vchWIF.insert(vchWIF.end(), vchSecret.begin(), vchSecret.end());
+    return EncodeBase58Check(vchWIF);
+}
+
+
+Value importprivkey(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 2)
+        throw runtime_error(
+            "importprivkey <bitokprivkey> [label]\n"
+            "Adds a private key (as returned by dumpprivkey) to your wallet.");
+
+    string strSecret = params[0].get_str();
+    string strLabel;
+    if (params.size() > 1)
+        strLabel = params[1].get_str();
+
+    vector<unsigned char> vchWIF;
+    if (!DecodeBase58Check(strSecret, vchWIF))
+        throw runtime_error("Invalid private key encoding");
+    if (vchWIF.size() < 33 || vchWIF[0] != 128)
+        throw runtime_error("Invalid private key version");
+
+    vector<unsigned char> vchSecret(vchWIF.begin() + 1, vchWIF.begin() + 33);
+
+    CKey key;
+    if (!key.SetSecret(vchSecret))
+        throw runtime_error("Invalid private key");
+
+    if (!AddKey(key))
+        throw runtime_error("Error adding key to wallet");
+
+    string strAddress = PubKeyToAddress(key.GetPubKey());
+    if (!strLabel.empty())
+        SetAddressBookName(strAddress, strLabel);
+
+    return strAddress;
+}
+
+
 //
 // Call Table
 //
@@ -1715,6 +1782,8 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("sendrawtransaction",    &sendrawtransaction),
     make_pair("gettxoutproof",         &gettxoutproof),
     make_pair("verifytxoutproof",      &verifytxoutproof),
+    make_pair("dumpprivkey",           &dumpprivkey),
+    make_pair("importprivkey",         &importprivkey),
 };
 map<string, rpcfn_type> mapCallTable(pCallTable, pCallTable + sizeof(pCallTable)/sizeof(pCallTable[0]));
 
