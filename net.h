@@ -48,12 +48,6 @@ bool StopNode();
 //  (4) size
 //  (4) checksum
 
-// The message start string is designed to be unlikely to occur in normal data.
-// The characters are rarely used upper ascii, not valid as UTF-8, and produce
-// a large 4-byte int at any alignment.
-// Bitok: unique network magic bytes for network isolation
-static const unsigned char pchMessageStart[4] = { 0xb4, 0x0b, 0xc0, 0xde };
-
 class CMessageHeader
 {
 public:
@@ -362,6 +356,7 @@ enum
 {
     MSG_TX = 1,
     MSG_BLOCK,
+    MSG_FILTERED_BLOCK,
 };
 
 static const char* ppszTypeName[] =
@@ -369,6 +364,7 @@ static const char* ppszTypeName[] =
     "ERROR",
     "tx",
     "block",
+    "filteredblock",
 };
 
 class CInv
@@ -540,6 +536,10 @@ public:
     // publish and subscription
     vector<char> vfSubscribe;
 
+    // SPV bloom filter
+    CBloomFilter* pfilter;
+    CCriticalSection cs_filter;
+
 
     CNode(SOCKET hSocketIn, CAddress addrIn, bool fInboundIn=false)
     {
@@ -576,6 +576,7 @@ public:
         nStartingHeight = -1;
         fGetAddr = false;
         vfSubscribe.assign(256, false);
+        pfilter = NULL;
 
         // Push a version message
         /// when NTP implemented, change to just nTime = GetAdjustedTime()
@@ -593,6 +594,11 @@ public:
         {
             closesocket(hSocket);
             hSocket = INVALID_SOCKET;
+        }
+        if (pfilter)
+        {
+            delete pfilter;
+            pfilter = NULL;
         }
     }
 

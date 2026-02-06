@@ -1964,8 +1964,9 @@ bool AlreadyHave(CTxDB& txdb, const CInv& inv)
 {
     switch (inv.type)
     {
-    case MSG_TX:    return mapTransactions.count(inv.hash) || txdb.ContainsTx(inv.hash);
-    case MSG_BLOCK: return mapBlockIndex.count(inv.hash) || mapOrphanBlocks.count(inv.hash);
+    case MSG_TX:             return mapTransactions.count(inv.hash) || txdb.ContainsTx(inv.hash);
+    case MSG_BLOCK:
+    case MSG_FILTERED_BLOCK: return mapBlockIndex.count(inv.hash) || mapOrphanBlocks.count(inv.hash);
     }
     // Don't know what it is, just say we already got one
     return true;
@@ -2280,23 +2281,47 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             if (fDebug)
                 printf("[MSG] received getdata for: %s\n", inv.ToString().c_str());
 
-            if (inv.type == MSG_BLOCK)
+            if (inv.type == MSG_BLOCK || inv.type == MSG_FILTERED_BLOCK)
             {
-                // Send block from disk
                 auto mi = mapBlockIndex.find(inv.hash);
                 if (mi != mapBlockIndex.end())
                 {
-                    //// could optimize this to send header straight from blockindex for client
                     CBlock block;
-                    block.ReadFromDisk((*mi).second, !pfrom->fClient);
-                    pfrom->PushMessage("block", block);
+                    block.ReadFromDisk((*mi).second, true);
 
-                    // Trigger them to send a getblocks request for the next batch of inventory
+                    if (inv.type == MSG_FILTERED_BLOCK)
+                    {
+                        CRITICAL_BLOCK(pfrom->cs_filter)
+                        {
+                            if (pfrom->pfilter)
+                            {
+                                CMerkleBlock merkleBlock(block, *pfrom->pfilter);
+                                pfrom->PushMessage("merkleblock", merkleBlock);
+                                vector<uint256> vMatchedTxn;
+                                merkleBlock.txn.ExtractMatches(vMatchedTxn);
+
+                                for (unsigned int i = 0; i < block.vtx.size(); i++)
+                                {
+                                    uint256 txHash = block.vtx[i].GetHash();
+                                    for (unsigned int j = 0; j < vMatchedTxn.size(); j++)
+                                    {
+                                        if (vMatchedTxn[j] == txHash)
+                                        {
+                                            pfrom->PushMessage("tx", block.vtx[i]);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        pfrom->PushMessage("block", block);
+                    }
+
                     if (inv.hash == pfrom->hashContinue)
                     {
-                        // Bypass PushInventory, this must send even if redundant,
-                        // and we want it right after the last block so they don't
-                        // wait for other stuff first.
                         vector<CInv> vInv;
                         vInv.push_back(CInv(MSG_BLOCK, hashBestChain));
                         pfrom->PushMessage("inv", vInv);
@@ -2518,6 +2543,136 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         }
         if (!tracker.IsNull())
             tracker.fn(tracker.param1, vRecv);
+    }
+
+
+    else if (strCommand == "getheaders")
+    {
+        CBlockLocator locator;
+        uint256 hashStop;
+        vRecv >> locator >> hashStop;
+
+        CBlockIndex* pindex = NULL;
+        if (locator.IsNull())
+        {
+            auto mi = mapBlockIndex.find(hashStop);
+            if (mi == mapBlockIndex.end())
+                return true;
+            pindex = (*mi).second;
+        }
+        else
+        {
+            pindex = locator.GetBlockIndex();
+            if (pindex)
+                pindex = pindex->pnext;
+        }
+
+        vector<CBlock> vHeaders;
+        int nLimit = 2000;
+        if (fDebug)
+            printf("[SPV] getheaders %d to %s\n", (pindex ? pindex->nHeight : -1), hashStop.ToString().substr(0,16).c_str());
+        for (; pindex; pindex = pindex->pnext)
+        {
+            CBlock header;
+            header.nVersion       = pindex->nVersion;
+            header.hashPrevBlock  = (pindex->pprev ? pindex->pprev->GetBlockHash() : uint256(0));
+            header.hashMerkleRoot = pindex->hashMerkleRoot;
+            header.nTime          = pindex->nTime;
+            header.nBits          = pindex->nBits;
+            header.nNonce         = pindex->nNonce;
+            vHeaders.push_back(header);
+            if (--nLimit <= 0 || pindex->GetBlockHash() == hashStop)
+                break;
+        }
+        pfrom->PushMessage("headers", vHeaders);
+    }
+
+
+    else if (strCommand == "headers")
+    {
+    }
+
+
+    else if (strCommand == "filterload")
+    {
+        CBloomFilter filter;
+        vRecv >> filter;
+
+        if (!filter.IsWithinSizeConstraints())
+        {
+            pfrom->fDisconnect = true;
+            return false;
+        }
+
+        CRITICAL_BLOCK(pfrom->cs_filter)
+        {
+            if (pfrom->pfilter)
+                delete pfrom->pfilter;
+            pfrom->pfilter = new CBloomFilter(filter);
+            pfrom->fClient = true;
+        }
+        if (fDebug)
+            printf("[SPV] Loaded bloom filter from %s\n", pfrom->addr.ToStringLog().c_str());
+    }
+
+
+    else if (strCommand == "filteradd")
+    {
+        vector<unsigned char> vData;
+        vRecv >> vData;
+
+        if (vData.size() > 520)
+        {
+            pfrom->fDisconnect = true;
+            return false;
+        }
+
+        CRITICAL_BLOCK(pfrom->cs_filter)
+        {
+            if (pfrom->pfilter)
+                pfrom->pfilter->insert(vData);
+        }
+    }
+
+
+    else if (strCommand == "filterclear")
+    {
+        CRITICAL_BLOCK(pfrom->cs_filter)
+        {
+            if (pfrom->pfilter)
+            {
+                delete pfrom->pfilter;
+                pfrom->pfilter = NULL;
+            }
+        }
+        pfrom->fClient = false;
+    }
+
+
+    else if (strCommand == "mempool")
+    {
+        vector<CInv> vInv;
+        CRITICAL_BLOCK(cs_mapTransactions)
+        {
+            vInv.reserve(mapTransactions.size());
+            for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin();
+                 mi != mapTransactions.end(); ++mi)
+            {
+                uint256 hash = (*mi).first;
+                bool fSend = true;
+                CRITICAL_BLOCK(pfrom->cs_filter)
+                {
+                    if (pfrom->pfilter)
+                        fSend = pfrom->pfilter->IsRelevantAndUpdate((*mi).second, hash);
+                }
+                if (fSend)
+                {
+                    CInv inv(MSG_TX, hash);
+                    vInv.push_back(inv);
+                }
+            }
+        }
+        pfrom->PushMessage("inv", vInv);
     }
 
 

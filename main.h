@@ -4,6 +4,7 @@
 
 #include "yespower_hash.h"
 
+class CNode;
 class COutPoint;
 class CInPoint;
 class CDiskTxPos;
@@ -16,6 +17,7 @@ class CBlockIndex;
 class CWalletTx;
 class CKeyItem;
 
+static const unsigned char pchMessageStart[4] = { 0xb4, 0x0b, 0xc0, 0xde };
 static const unsigned int MAX_BLOCK_SIZE = 1000000;
 static const unsigned int MAX_SIZE = 0x02000000;
 static const unsigned int MAX_INV_SZ = 50000;
@@ -1326,6 +1328,11 @@ public:
             READWRITE(nVersion);
         READWRITE(vHave);
     )
+
+    bool IsNull()
+    {
+        return vHave.empty();
+    }
 
     void Set(const CBlockIndex* pindex)
     {

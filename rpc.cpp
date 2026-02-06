@@ -1463,6 +1463,213 @@ Value listreceivedbylabel(const Array& params, bool fHelp)
 
 
 
+Value getblockheader(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "getblockheader <hash>\n"
+            "Returns header information for the block with the given hash.");
+
+    string strHash = params[0].get_str();
+    uint256 hash;
+    hash.SetHex(strHash);
+
+    if (mapBlockIndex.count(hash) == 0)
+        throw runtime_error("Block not found");
+
+    CBlockIndex* pblockindex = mapBlockIndex[hash];
+
+    Object result;
+    result.push_back(Pair("hash", pblockindex->GetBlockHash().ToString()));
+    result.push_back(Pair("version", pblockindex->nVersion));
+    uint256 hashPrevBlock = (pblockindex->pprev ? pblockindex->pprev->GetBlockHash() : uint256(0));
+    result.push_back(Pair("previousblockhash", hashPrevBlock.ToString()));
+    result.push_back(Pair("merkleroot", pblockindex->hashMerkleRoot.ToString()));
+    result.push_back(Pair("time", (boost::int64_t)pblockindex->nTime));
+    result.push_back(Pair("bits", (boost::int64_t)pblockindex->nBits));
+    result.push_back(Pair("nonce", (boost::int64_t)pblockindex->nNonce));
+    result.push_back(Pair("height", pblockindex->nHeight));
+    result.push_back(Pair("confirmations", 1 + nBestHeight - pblockindex->nHeight));
+    if (pblockindex->pnext)
+        result.push_back(Pair("nextblockhash", pblockindex->pnext->GetBlockHash().ToString()));
+
+    CDataStream ssHeader(SER_NETWORK | SER_BLOCKHEADERONLY);
+    CBlock header;
+    header.nVersion       = pblockindex->nVersion;
+    header.hashPrevBlock  = hashPrevBlock;
+    header.hashMerkleRoot = pblockindex->hashMerkleRoot;
+    header.nTime          = pblockindex->nTime;
+    header.nBits          = pblockindex->nBits;
+    header.nNonce         = pblockindex->nNonce;
+    ssHeader << header;
+    result.push_back(Pair("hex", HexStr(ssHeader.begin(), ssHeader.end(), false)));
+
+    return result;
+}
+
+
+Value sendrawtransaction(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "sendrawtransaction <hex string>\n"
+            "Submits raw transaction (serialized, hex-encoded) to local node and network.\n"
+            "Returns transaction hash.");
+
+    vector<unsigned char> txData = ParseHex(params[0].get_str());
+    CDataStream ssData(txData, SER_NETWORK);
+    CTransaction tx;
+
+    try {
+        ssData >> tx;
+    }
+    catch (std::exception &e) {
+        throw runtime_error("TX decode failed");
+    }
+
+    uint256 hashTx = tx.GetHash();
+
+    CRITICAL_BLOCK(cs_mapTransactions)
+    {
+        if (mapTransactions.count(hashTx))
+            return hashTx.ToString();
+    }
+
+    CTxDB txdb("r");
+    CTxIndex txindex;
+    if (txdb.ReadTxIndex(hashTx, txindex))
+        return hashTx.ToString();
+
+    bool fMissingInputs = false;
+    if (!tx.AcceptTransaction(true, &fMissingInputs))
+    {
+        if (fMissingInputs)
+            throw runtime_error("Missing inputs");
+        throw runtime_error("Transaction rejected");
+    }
+
+    CInv inv(MSG_TX, hashTx);
+    CDataStream ss(SER_NETWORK);
+    ss << tx;
+    RelayMessage(inv, ss);
+
+    return hashTx.ToString();
+}
+
+
+Value gettxoutproof(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 2)
+        throw runtime_error(
+            "gettxoutproof <txid> [blockhash]\n"
+            "Returns a hex-encoded merkle proof that the transaction was included in a block.\n"
+            "Optionally specify the block hash to look in.");
+
+    string strTxid = params[0].get_str();
+    uint256 hashTx;
+    hashTx.SetHex(strTxid);
+
+    uint256 hashBlock = 0;
+    if (params.size() > 1)
+    {
+        string strBlock = params[1].get_str();
+        hashBlock.SetHex(strBlock);
+    }
+
+    if (hashBlock == 0)
+    {
+        CRITICAL_BLOCK(cs_mapWallet)
+        {
+            if (mapWallet.count(hashTx))
+                hashBlock = mapWallet[hashTx].hashBlock;
+        }
+
+        if (hashBlock == 0)
+        {
+            CTxDB txdb("r");
+            CTxIndex txindex;
+            if (!txdb.ReadTxIndex(hashTx, txindex))
+                throw runtime_error("Transaction not yet in a block");
+
+            CBlock block;
+            if (!block.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, true))
+                throw runtime_error("Block not found on disk");
+
+            hashBlock = block.GetHash();
+        }
+    }
+
+    if (hashBlock == 0)
+        throw runtime_error("Transaction not found in any block");
+
+    if (mapBlockIndex.count(hashBlock) == 0)
+        throw runtime_error("Block not found");
+
+    CBlockIndex* pblockindex = mapBlockIndex[hashBlock];
+    CBlock block;
+    block.ReadFromDisk(pblockindex, true);
+
+    bool fFound = false;
+    for (unsigned int i = 0; i < block.vtx.size(); i++)
+    {
+        if (block.vtx[i].GetHash() == hashTx)
+        {
+            fFound = true;
+            break;
+        }
+    }
+    if (!fFound)
+        throw runtime_error("Transaction not found in specified block");
+
+    set<uint256> txids;
+    txids.insert(hashTx);
+    CMerkleBlock merkleBlock(block, txids);
+
+    CDataStream ssMB(SER_NETWORK);
+    ssMB << merkleBlock;
+
+    return HexStr(ssMB.begin(), ssMB.end(), false);
+}
+
+
+Value verifytxoutproof(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "verifytxoutproof <hex proof>\n"
+            "Verifies a merkle proof and returns the transaction ids it commits to.\n"
+            "Returns array of transaction ids the proof commits to, or empty if invalid.");
+
+    vector<unsigned char> proofData = ParseHex(params[0].get_str());
+    CDataStream ssMB(proofData, SER_NETWORK);
+    CMerkleBlock merkleBlock;
+    ssMB >> merkleBlock;
+
+    vector<uint256> vMatch;
+    uint256 hashMerkleRoot = merkleBlock.txn.ExtractMatches(vMatch);
+
+    if (hashMerkleRoot == 0)
+        return Array();
+
+    uint256 hashBlock = merkleBlock.header.GetHash();
+    if (mapBlockIndex.count(hashBlock) == 0)
+        return Array();
+
+    CBlockIndex* pindex = mapBlockIndex[hashBlock];
+    if (!pindex->IsInMainChain())
+        return Array();
+
+    if (pindex->hashMerkleRoot != hashMerkleRoot)
+        return Array();
+
+    Array result;
+    for (unsigned int i = 0; i < vMatch.size(); i++)
+        result.push_back(vMatch[i].ToString());
+
+    return result;
+}
+
+
 //
 // Call Table
 //
@@ -1504,6 +1711,10 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("getreceivedbylabel",    &getreceivedbylabel),
     make_pair("listreceivedbyaddress", &listreceivedbyaddress),
     make_pair("listreceivedbylabel",   &listreceivedbylabel),
+    make_pair("getblockheader",        &getblockheader),
+    make_pair("sendrawtransaction",    &sendrawtransaction),
+    make_pair("gettxoutproof",         &gettxoutproof),
+    make_pair("verifytxoutproof",      &verifytxoutproof),
 };
 map<string, rpcfn_type> mapCallTable(pCallTable, pCallTable + sizeof(pCallTable)/sizeof(pCallTable[0]));
 

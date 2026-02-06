@@ -151,9 +151,11 @@ using namespace boost;
 #include "base58.h"
 #include "script.h"
 #include "bitcoin_db.h"
+#include "main.h"
+#include "bloom.h"
+#include "merkleblock.h"
 #include "net.h"
 #include "irc.h"
-#include "main.h"
 #include "rpc.h"
 #if wxUSE_GUI
 #include "uibase.h"

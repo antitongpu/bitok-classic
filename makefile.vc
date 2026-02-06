@@ -144,7 +144,7 @@ LIBS_GUI=$(WX_LIBS) $(DB_LIB) $(SSL_LIBS) $(ZLIB_LIB) $(LIBS_WIN) uxtheme.lib
 # ============================================================================
 HEADERS=headers.h strlcpy.h serialize.h uint256.h util.h key.h bignum.h base58.h
 HEADERS=$(HEADERS) script.h bitcoin_db.h db_cxx_compat.h net.h irc.h main.h rpc.h
-HEADERS=$(HEADERS) uibase.h ui.h init.h sha.h yespower.h yespower_hash.h sysendian.h
+HEADERS=$(HEADERS) uibase.h ui.h init.h sha.h yespower.h yespower_hash.h sysendian.h bloom.h merkleblock.h
 
 # ============================================================================
 # OBJECT FILES

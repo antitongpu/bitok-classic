@@ -149,7 +149,7 @@ CRYPTO_DEFS = -DENABLE_SSE41 -DENABLE_X86_SHANI
 # Headers
 HEADERS = headers.h strlcpy.h serialize.h uint256.h util.h key.h bignum.h base58.h \
     script.h bitcoin_db.h db_cxx_compat.h net.h irc.h main.h rpc.h uibase.h ui.h init.h sha.h \
-    yespower.h yespower_hash.h sysendian.h
+    yespower.h yespower_hash.h sysendian.h bloom.h merkleblock.h
 
 # Crypto object files (optimized SHA256)
 OBJS_CRYPTO = \
