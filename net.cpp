@@ -1123,6 +1123,8 @@ void ThreadOpenConnections2(void* parg)
                 CAddrDB addrdb;
                 foreach(const vector<unsigned char>& key, vToErase)
                 {
+                    if (mapAddresses.count(key))
+                        addrdb.EraseAddress(mapAddresses[key]);
                     mapAddresses.erase(key);
                 }
             }
