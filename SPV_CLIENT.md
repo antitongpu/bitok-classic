@@ -1,6 +1,6 @@
 # BITOK SPV (Lightweight) Client - Technical Specification
 
-This document describes the protocol and architecture for building a True P2P SPV (Simplified Payment Verification) client for the Bitok network. All required node-side changes have been implemented.
+This document describes the protocol and architecture for building a lightweight wallet for the Bitok network based on the actual node implementation (Bitcoin 0.3 fork with Yespower PoW).
 
 ## Overview
 
@@ -10,32 +10,93 @@ An SPV client verifies payments without downloading the full blockchain. It down
 
 ---
 
-## Protocol Messages
+## Critical Architecture Constraint: No Address Indexing
+
+The Bitok node (Bitcoin 0.3 architecture) does **NOT** maintain any address-based index. Balance and UTXO queries only work for keys held in the node's own `wallet.dat`:
+
+- `GetBalance()` (`main.cpp:3595`) iterates `mapWallet` -- an in-memory map of transactions loaded from `wallet.dat`
+- `IsMine()` (`script.cpp:1027`) checks script pubkeys against `mapKeys` and `mapPubKeys` -- keys the node operator owns
+- `listunspent` (`rpc.cpp:1229`) only returns UTXOs where `txout.IsMine()` is true
+- `getbalance` (`rpc.cpp:410`) returns the sum of `mapWallet` credits only
+- `getreceivedbyaddress` (`rpc.cpp:1005`) returns 0.0 for any address not in the node's keyring
+
+There is a `ReadOwnerTxes()` function (`bitcoin_db.h:276`) that can look up transactions by Hash160, but it only covers keys the node has in its wallet and is not exposed via RPC.
+
+**Consequence**: A light wallet cannot query a standard Bitok node for "what is the balance of address X" or "give me UTXOs for address X" unless that address's key is imported into the node's wallet.
+
+### Solutions for Light Wallet Balance Discovery
+
+**Option A: Electrum-style indexing server (recommended)**
+
+Build a separate indexing service that:
+1. Connects to a Bitok node via RPC (`getblockhash`, `getblock`, `getrawtransaction`)
+2. Scans every block and indexes transactions by output address into a database
+3. Maintains a UTXO set indexed by address
+4. Exposes an API: `GET /balance/:address`, `GET /utxos/:address`, `POST /broadcast`
+
+The light wallet talks to this indexer, not to the node directly.
+
+**Option B: True P2P SPV with bloom filters**
+
+The bloom filter infrastructure exists in the node (`bloom.h`, `merkleblock.h`, `main.cpp:2596-2676`). The light wallet:
+1. Syncs all block headers via `getheaders`/`headers`
+2. Sends a `filterload` with a bloom filter matching its own addresses
+3. Requests blocks via `getdata` with `MSG_FILTERED_BLOCK` (type 3)
+4. Receives `merkleblock` + matched `tx` messages
+5. Tracks its own UTXOs locally from matched transactions
+
+This is fully decentralized but requires implementing the binary P2P protocol and managing the complete header chain.
+
+**Option C: Import keys into a full node**
+
+Use `importprivkey` RPC (`rpc.cpp:1705`) to import the wallet's keys into a running node. Then `listunspent` and `getbalance` work normally. Simple but:
+- Couples the wallet to a specific node
+- Requires trusting the node operator with private keys
+- Does not scale to many users
+
+---
+
+## P2P Protocol Messages
+
+### Connection Handshake
+
+The node sends a `version` message on connect (`net.h:587`):
+
+| Field | Value |
+|-------|-------|
+| version | 319 (`serialize.h:22`) |
+| services | `NODE_NETWORK` (1) for full nodes, 0 for SPV |
+| timestamp | int64 |
+| addr_recv | Peer address |
+| addr_from | Local address |
+| nonce | Random uint64 |
+| sub_version | Empty string |
+| start_height | Best block height |
+
+Protocol negotiation uses `min(local_version, remote_version)` (`main.cpp:2161`).
 
 ### Header Synchronization
 
 #### `getheaders` (client -> node)
 
-Requests a batch of block headers. This is the primary synchronization mechanism for SPV clients.
+Requests a batch of block headers.
 
 **Payload**:
 | Field | Type | Description |
 |-------|------|-------------|
-| version | int32 | Protocol version |
-| hash_count | varint | Number of block locator hashes |
-| block_locator_hashes | uint256[] | Block locator object (same as `getblocks`) |
+| locator | CBlockLocator | Block locator object (serialized with version prefix) |
 | hash_stop | uint256 | Stop at this hash (0 = send as many as possible) |
 
-**Behavior**:
-- The node finds the first block in the locator that exists in its main chain
-- Returns up to **2000 headers** starting from the block after the match
-- If locator is empty and hash_stop is set, returns headers starting from that specific block
+**Node behavior** (`main.cpp:2549-2588`):
+- If locator is null and hash_stop is set, starts from that specific block
+- Otherwise, finds the first locator hash in the main chain, starts from the next block
+- Returns up to **2000 headers**
+- Stops at hash_stop or when limit is reached
 
-**Block Locator Construction**:
-The locator is built by walking back from the client's best known header:
-1. Add the 10 most recent hashes (step = 1)
-2. Then exponentially increase step size (step *= 2)
-3. Always include the genesis block hash as the last entry
+**Block Locator Construction** (`main.h:1337-1352`):
+1. Walk back from tip adding hashes
+2. After 10 entries, double the step size each iteration
+3. Always append the genesis block hash as the last entry
 
 ```
 [tip, tip-1, tip-2, ..., tip-9, tip-11, tip-15, tip-23, ..., genesis]
@@ -43,125 +104,164 @@ The locator is built by walking back from the client's best known header:
 
 #### `headers` (node -> client)
 
-Response to `getheaders`.
-
-**Payload**:
-| Field | Type | Description |
-|-------|------|-------------|
-| count | varint | Number of headers (max 2000) |
-| headers | block_header[] | Array of block headers, each 81 bytes (80-byte header + varint 0 for empty tx count) |
+Response to `getheaders`. Contains a vector of `CBlock` objects serialized as header-only (80 bytes each, vtx omitted via `SER_BLOCKHEADERONLY` flag).
 
 **Block Header Format** (80 bytes):
 | Field | Size | Description |
 |-------|------|-------------|
-| nVersion | 4 bytes | Block version |
-| hashPrevBlock | 32 bytes | Hash of previous block header |
+| nVersion | 4 bytes | Block version (currently 1) |
+| hashPrevBlock | 32 bytes | SHA256d hash of previous block header |
 | hashMerkleRoot | 32 bytes | Root of the Merkle tree of transactions |
 | nTime | 4 bytes | Block timestamp (Unix epoch) |
 | nBits | 4 bytes | Compact difficulty target |
 | nNonce | 4 bytes | Nonce used for proof-of-work |
 
+Note: The block's identity hash (`GetHash()`) is `SHA256d(header_80_bytes)`, but proof-of-work validation uses `GetPoWHash()` which is `Yespower(header_80_bytes)`.
+
 ### Bloom Filtering (BIP37-style)
 
-Bloom filters allow SPV clients to request only transactions relevant to their wallet without revealing their exact addresses.
+Bloom filters allow SPV clients to request only transactions relevant to their wallet.
 
 #### `filterload` (client -> node)
 
-Sets a bloom filter on the connection. After this, the node will only relay transactions matching the filter and will send `merkleblock` messages instead of full `block` messages.
+Sets a bloom filter on the connection (`main.cpp:2596-2616`). After this:
+- The node sets `pfrom->fClient = true`
+- `getdata` requests with `MSG_FILTERED_BLOCK` will return `merkleblock` + matched transactions
+- `mempool` responses are filtered through the bloom filter
 
-**Payload**:
+**Payload** (CBloomFilter serialization, `bloom.h:65-71`):
 | Field | Type | Description |
 |-------|------|-------------|
-| filter | uint8[] | The bloom filter data |
+| vData | vector\<uint8\> | The bloom filter bit array |
 | nHashFuncs | uint32 | Number of hash functions |
 | nTweak | uint32 | Random tweak for hash function seed |
 | nFlags | uint8 | Filter update flags |
 
-**Filter flags**:
-- `BLOOM_UPDATE_NONE` (0): Filter is not updated when a match is found
-- `BLOOM_UPDATE_ALL` (1): Filter is updated with outpoints for all matched outputs
+**Filter flags** (`bloom.h:11-16`):
+- `BLOOM_UPDATE_NONE` (0): Filter is not updated on match
+- `BLOOM_UPDATE_ALL` (1): Outpoints added for all matched outputs
 - `BLOOM_UPDATE_P2PUBKEY_ONLY` (2): Only update for P2PK/multisig outputs
 
-**Filter sizing**: For `n` elements and false-positive rate `p`:
-- Filter size (bytes): `-1 / (ln(2)^2) * n * ln(p) / 8`
-- Number of hash functions: `(filter_size_bits / n) * ln(2)`
-- Max filter size: 36,000 bytes
-- Max hash functions: 50
+**Hash function** (`bloom.h:30-39`):
+The bloom filter uses a custom Murmur-like hash, NOT standard MurmurHash3:
+```
+Hash(nHashNum, data):
+  nIndex = nHashNum * 0xFBA4C795 + nTweak
+  for each byte b in data:
+    nIndex ^= b
+    nIndex += (nIndex << 1) + (nIndex << 4) + (nIndex << 7) + (nIndex << 8) + (nIndex << 24)
+  return nIndex % (filter_size_bits)
+```
 
-**Recommended parameters**:
-- For a wallet with 100 addresses: ~1200 bytes at 0.0001 FP rate
-- For a wallet with 1000 addresses: ~12000 bytes at 0.0001 FP rate
-- Use `BLOOM_UPDATE_ALL` for simplicity, `BLOOM_UPDATE_P2PUBKEY_ONLY` for better privacy
+**Constraints**:
+- Max filter size: 36,000 bytes (`MAX_BLOOM_FILTER_SIZE`)
+- Max hash functions: 50 (`MAX_HASH_FUNCS`)
+- Filter exceeding constraints causes disconnect (`main.cpp:2601-2605`)
+
+**Filter sizing** (`bloom.h:49-63`): For `n` elements and false-positive rate `p`:
+- Filter size (bytes): `-1.0 / (ln(2)^2) * n * ln(p) / 8.0`
+- Number of hash functions: `(filter_size_bits / n) * ln(2)`
 
 #### `filteradd` (client -> node)
 
-Adds a single data element to the existing bloom filter.
+Adds a single data element to the existing bloom filter (`main.cpp:2619-2635`).
 
 **Payload**:
 | Field | Type | Description |
 |-------|------|-------------|
-| data | uint8[] | Data element to add (max 520 bytes) |
-
-Typically used to add a new address/pubkey hash after generating a new receiving address.
+| data | vector\<uint8\> | Data element to add (max 520 bytes, disconnect if exceeded) |
 
 #### `filterclear` (client -> node)
 
-Removes the bloom filter from the connection. The node resumes full block relay.
+Removes the bloom filter (`main.cpp:2638-2649`). Sets `pfrom->fClient = false`, resuming full block relay.
 
 **Payload**: Empty
 
-### Merkle Block Verification
-
-#### `merkleblock` (node -> client)
-
-Sent instead of `block` when a bloom filter is active. Contains the block header and a partial Merkle tree proving which transactions matched the filter.
-
-**Payload**:
-| Field | Type | Description |
-|-------|------|-------------|
-| header | block_header | 80-byte block header |
-| num_transactions | uint32 | Total number of transactions in the block |
-| hashes | uint256[] | Hashes in depth-first order |
-| flags | uint8[] | Bit flags for tree traversal |
-
-After receiving `merkleblock`, the node sends individual `tx` messages for each matched transaction.
-
-**Verification algorithm**:
-1. Reconstruct the partial Merkle tree from `hashes` and `flags`
-2. The reconstructed root must equal `header.hashMerkleRoot`
-3. The matched transaction hashes are extracted during reconstruction
-4. Verify proof-of-work on the header: `GetPoWHash(header) <= target_from_nBits`
+### Filtered Block Retrieval
 
 #### `getdata` with `MSG_FILTERED_BLOCK` (client -> node)
 
-To request a filtered block, the client sends `getdata` with inventory type `MSG_FILTERED_BLOCK` (3) instead of `MSG_BLOCK` (2).
+Send `getdata` with inventory type `MSG_FILTERED_BLOCK` (3) to request a filtered block.
 
-**Inventory types**:
+**Node response** (`main.cpp:2292-2317`):
+1. Reads the full block from disk
+2. Constructs `CMerkleBlock` by matching transactions against the peer's bloom filter
+3. Sends `merkleblock` message with header + partial Merkle tree
+4. Sends individual `tx` messages for each matched transaction
+
+**Inventory types** (`net.h:356-360`):
 | Value | Name | Description |
 |-------|------|-------------|
 | 1 | MSG_TX | Transaction |
 | 2 | MSG_BLOCK | Full block |
 | 3 | MSG_FILTERED_BLOCK | Filtered block (merkleblock + matching txs) |
 
+#### `merkleblock` (node -> client)
+
+Contains a CMerkleBlock (`merkleblock.h:159-214`):
+| Field | Type | Description |
+|-------|------|-------------|
+| header | CBlock (header-only) | 80-byte block header |
+| txn | CPartialMerkleTree | Partial Merkle tree proving matched transactions |
+
+CPartialMerkleTree (`merkleblock.h:8-156`):
+| Field | Type | Description |
+|-------|------|-------------|
+| nTransactions | uint32 | Total number of transactions in the block |
+| vHash | vector\<uint256\> | Hashes in depth-first order |
+| vBits | bit vector | Packed as bytes, bit flags for tree traversal |
+
+**Verification**:
+1. Call `ExtractMatches()` to reconstruct the partial Merkle tree
+2. Returns the computed Merkle root and a vector of matched transaction hashes
+3. Verify the computed root matches `header.hashMerkleRoot`
+4. Verify `GetPoWHash(header) <= target_from_nBits`
+5. Verify the header is in the validated header chain
+
+Validation bounds in `ExtractMatches()` (`merkleblock.h:124-130`):
+- `nTransactions` must not be 0
+- `nTransactions` must not exceed `MAX_BLOCK_SIZE / 60` (16,666)
+- `vHash.size()` must not exceed `nTransactions`
+- `vBits.size()` must be at least `vHash.size()`
+
 ### Mempool Discovery
 
 #### `mempool` (client -> node)
 
-Requests the node to send `inv` messages for transactions in its mempool. If a bloom filter is active on the connection, only transactions matching the filter are included (per BIP37).
+Requests mempool transaction inventory (`main.cpp:2652-2676`).
 
 **Payload**: Empty
 
-**Response**: The node sends an `inv` message containing matching mempool transaction hashes (or all hashes if no bloom filter is set).
+**Response**: The node sends an `inv` message containing transaction hashes. If a bloom filter is active, only matching transactions are included (checked via `pfilter->IsRelevantAndUpdate()`).
+
+**Filter matching** (`bloom.h:110-167`):
+A transaction matches the bloom filter if any of:
+- The transaction hash itself is in the filter
+- Any data push in any output script matches the filter
+- Any serialized outpoint in inputs matches the filter
+- Any data push in any input script matches the filter
+
+When `BLOOM_UPDATE_ALL` is set and an output matches, the corresponding outpoint is automatically added to the filter to detect future spends.
 
 ---
 
 ## RPC Interface
 
-These RPC commands support SPV client operations when connecting to a trusted full node.
+These RPC commands support SPV operations when connecting to a trusted full node.
 
-### `getblockheader <hash>`
+### Block & Header Queries
 
-Returns header information for a specific block.
+#### `getblockcount`
+Returns the height of the best chain tip. No parameters.
+
+#### `getblockhash <height>`
+Returns the hash of the block at the given height in the best chain.
+
+#### `getbestblockhash`
+Returns the hash of the best chain tip. No parameters.
+
+#### `getblockheader <hash>`
+Returns header information for a specific block (`rpc.cpp:1466-1508`).
 
 **Response**:
 ```json
@@ -180,131 +280,107 @@ Returns header information for a specific block.
 }
 ```
 
-The `hex` field contains the raw 80-byte header in hex encoding.
+The `hex` field contains the raw 80-byte header serialized with `SER_NETWORK | SER_BLOCKHEADERONLY`.
 
-### `sendrawtransaction <hex>`
+#### `getblock <hash>`
+Returns full block information including transaction hashes (`rpc.cpp:151-188`).
 
-Broadcasts a raw signed transaction to the network.
+### Transaction Queries
 
-**Input**: Hex-encoded serialized transaction
-**Response**: Transaction hash (txid)
+#### `getrawtransaction <txid> [verbose=0]`
+Returns raw transaction data (`rpc.cpp:1121-1206`). Looks up in mempool first (`mapTransactions`), then on disk via `CTxDB`. Works for ANY transaction the node has seen, not just wallet transactions.
 
-This is essential for SPV clients that create and sign transactions locally.
+#### `gettransaction <txid>`
+Returns detailed wallet transaction info (`rpc.cpp:191-320`). Checks `mapWallet` first (wallet-only), then falls back to `CTxDB` for basic transaction data.
 
-### `gettxoutproof <txid> [blockhash]`
+### Transaction Broadcasting
 
-Returns a hex-encoded Merkle proof that a transaction was included in a block.
+#### `sendrawtransaction <hex>`
+Broadcasts a raw signed transaction (`rpc.cpp:1511-1557`). Decodes, validates, accepts to mempool, and relays via `RelayMessage`. Returns txid.
 
-**Input**:
-- `txid`: Transaction hash to prove
-- `blockhash` (optional): Specific block to look in
+### Merkle Proofs
 
-**Response**: Hex-encoded `CMerkleBlock` containing the header and partial Merkle tree.
+#### `gettxoutproof <txid> [blockhash]`
+Returns a hex-encoded CMerkleBlock proof (`rpc.cpp:1560-1632`). If `blockhash` is not provided, looks up the transaction's block via wallet or txindex.
 
-### `verifytxoutproof <hex proof>`
+#### `verifytxoutproof <hex>`
+Verifies a Merkle proof and returns the proven transaction IDs (`rpc.cpp:1635-1670`). Checks:
+- Merkle root reconstruction succeeds
+- Block hash exists in `mapBlockIndex`
+- Block is in the main chain
+- Reconstructed Merkle root matches the block's stored `hashMerkleRoot`
 
-Verifies a Merkle proof and returns the transaction IDs it commits to.
+### Key Management
 
-**Input**: Hex-encoded proof from `gettxoutproof`
-**Response**: Array of transaction IDs the proof validates, or empty array if invalid.
+#### `dumpprivkey <address>`
+Exports a private key in WIF format (version byte 128) (`rpc.cpp:1673-1702`). Only works for addresses in the node's wallet.
+
+#### `importprivkey <wif> [label]`
+Imports a WIF-encoded private key into the node's wallet (`rpc.cpp:1705-1737`). Triggers rescan of existing blocks for matching transactions.
+
+### Wallet Queries (node-owner only)
+
+These only return data for addresses the node holds keys for:
+
+| Command | Description |
+|---------|-------------|
+| `getbalance` | Total wallet balance |
+| `listunspent [minconf] [maxconf]` | Wallet UTXOs with confirmation range |
+| `listtransactions [count] [includegenerated]` | Recent wallet transactions |
+| `listreceivedbyaddress [minconf] [includeempty]` | Amounts received per wallet address |
+| `listreceivedbylabel [minconf] [includeempty]` | Amounts received per label |
+| `getreceivedbyaddress <address> [minconf]` | Total received by a wallet address |
+| `validateaddress <address>` | Address info including `ismine` flag |
 
 ---
 
-## SPV Client Architecture
+## Network Parameters
 
-### Recommended Stack
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| P2P port | 18333 | `net.h:15` |
+| RPC port | 8332 | `rpc.cpp:2039` |
+| Protocol version | 319 | `serialize.h:22` |
+| Magic bytes | `0xb4 0x0b 0xc0 0xde` | `main.h:20` |
+| Genesis block hash | `0x0290400ea28d3fe79d102ca6b7cd11cee5eba9f17f2046c303d92f65d6ed2617` | `main.cpp:40` |
+| Max block size | 1,000,000 bytes | `main.h:21` |
+| Block time target | 10 minutes (600 seconds) | `main.cpp:930` |
+| Difficulty retarget interval | 2016 blocks | `main.cpp:931` |
+| Target timespan | 14 days (1,209,600 seconds) | `main.cpp:929` |
+| Subsidy halving | Every 210,000 blocks | `main.cpp:922` |
+| Initial block reward | 50 BITOK | `main.cpp:920` |
+| Coinbase maturity | 100 blocks | `main.h:26` |
+| Max money | 21,000,000 BITOK | `main.h:29` |
+| PoW algorithm | Yespower 1.0 (N=2048, R=32) | `yespower_hash.h` |
+| PoW limit | `~uint256(0) >> 17` | `main.h:35` |
+| Address version byte | 0x00 | Standard Bitcoin mainnet |
+| WIF version byte | 0x80 (128) | `rpc.cpp:1699` |
+| Timewarp fix activation | Block 16,000 | `main.h:33` |
 
-**Option 1: Desktop (Rust)**
-- Networking: `tokio` + custom P2P protocol
-- Storage: `sled` or `sqlite` for headers
-- PoW: Yespower C reference implementation (FFI binding) -- required for header verification
-- Crypto: `secp256k1` crate (signing), `sha2` (double SHA256 for hashes), `ripemd` (Hash160 for addresses)
-- Key management: BIP32/BIP39 HD wallet
-- UI: `egui`, `tauri`, or CLI
+### Message Header Format
 
-**Option 2: Web/Mobile (TypeScript)**
-- Networking: WebSocket bridge to a gateway node
-- Storage: IndexedDB (browser) or SQLite (React Native)
-- PoW: Yespower compiled to WASM -- required for header verification
-- Crypto: `@noble/secp256k1` (signing), `@noble/hashes` (SHA256, RIPEMD160)
-- UI: React/Vite (web), React Native (mobile)
+All P2P messages use this 24-byte header (`net.h:51-93`):
 
-**Critical note**: The node uses secp256k1 via OpenSSL (`key.h`). SPV clients need the same curve for transaction signing. Yespower (with personalization string `"BitokPoW"`) is mandatory for PoW verification and has no pure-JS implementation -- a WASM build of the C reference is recommended.
+| Field | Size | Description |
+|-------|------|-------------|
+| magic | 4 bytes | `0xb4 0x0b 0xc0 0xde` |
+| command | 12 bytes | Null-padded ASCII command name |
+| length | 4 bytes | Payload size (max 268,435,456 bytes) |
+| checksum | 4 bytes | First 4 bytes of SHA256d(payload), only if version >= 209 |
 
-### Component Design
+### Checkpoints
 
-```
-+------------------+
-|    UI Layer      |
-+------------------+
-         |
-+------------------+
-|  Wallet Manager  |  <- Key generation, address derivation, balance tracking
-+------------------+
-         |
-+------------------+
-|  TX Builder      |  <- UTXO selection, transaction construction, signing
-+------------------+
-         |
-+------------------+
-|  SPV Engine      |  <- Header sync, Merkle verification, bloom filter management
-+------------------+
-         |
-+------------------+
-|  P2P Network     |  <- Connection management, message serialization, peer discovery
-+------------------+
-         |
-+------------------+
-|  Header Store    |  <- Persistent storage of validated header chain
-+------------------+
-```
+| Height | Hash | Source |
+|--------|------|--------|
+| 0 | `0x0290400ea28d3fe79d102ca6b7cd11cee5eba9f17f2046c303d92f65d6ed2617` | `main.cpp:92` |
+| 6666 | `0xe4845bb3b5426ace955dea347359030656921883d8723105e4ab79343c27cdca` | `main.cpp:93` |
+| 14000 | `0x10bb78b6ff9825b407f8d30e41f0aee7664759573382875dcf12bb947082c747` | `main.cpp:94` |
 
-### Synchronization Flow
+---
 
-1. **Initial connection**:
-   - Connect to one or more full nodes
-   - Send `version` message (set services to 0, indicating SPV)
-   - Receive `verack`
+## Proof-of-Work Verification
 
-2. **Header sync**:
-   - Build block locator from stored headers (or genesis if first sync)
-   - Send `getheaders` with locator
-   - Receive `headers` response (up to 2000 headers)
-   - Validate each header:
-     - `hashPrevBlock` matches previous header's hash
-     - Proof-of-work: `GetPoWHash(header) <= target_from_nBits` (Yespower)
-     - Timestamp within acceptable range
-     - Difficulty adjustment is correct
-   - Store validated headers
-   - If received 2000 headers, send another `getheaders` (more available)
-   - Repeat until receiving fewer than 2000 headers
-
-3. **Bloom filter setup**:
-   - Construct bloom filter containing:
-     - All wallet address hashes (Hash160 of public keys)
-     - All public keys (for P2PK outputs)
-     - All outpoints being tracked (for spending detection)
-   - Send `filterload` message
-
-4. **Transaction discovery**:
-   - Send `mempool` to discover unconfirmed transactions
-   - For historical transactions, request blocks via `getdata` with `MSG_FILTERED_BLOCK`
-   - Node responds with `merkleblock` + matching `tx` messages
-   - Verify each `merkleblock`:
-     - Reconstruct partial Merkle tree
-     - Verify root matches header's `hashMerkleRoot`
-     - Verify header's proof-of-work
-     - Verify header is in the validated chain
-
-5. **Ongoing monitoring**:
-   - Listen for `inv` messages for new blocks and transactions
-   - Request new blocks via `getdata` with `MSG_FILTERED_BLOCK`
-   - Request interesting transactions via `getdata` with `MSG_TX`
-   - When generating new addresses, send `filteradd` to update the bloom filter
-
-### Proof-of-Work Verification
-
-Bitok uses **Yespower** as its proof-of-work algorithm. The SPV client MUST implement Yespower hashing to verify block headers.
+Bitok uses **Yespower** as its proof-of-work algorithm.
 
 **Yespower parameters** (from `yespower_hash.h`):
 ```
@@ -314,106 +390,231 @@ R:        32
 Pers:     "BitokPoW" (8 bytes)
 ```
 
-The PoW hash is computed as:
+**Block hashing** (`main.h:935-943`):
+- `GetHash()` = `SHA256d(header_80_bytes)` -- used as block identifier/inventory hash
+- `GetPoWHash()` = `Yespower(header_80_bytes)` -- used for proof-of-work validation
+
+The PoW check is:
 ```
-pow_hash = yespower_1_0(header_bytes_80, N=2048, R=32, pers="BitokPoW")
-valid = (pow_hash <= target_from_compact_bits)
+valid = (GetPoWHash(header) <= target_from_compact_nBits)
 ```
 
-**Target calculation** from compact `nBits` (OpenSSL MPI encoding, see `bignum.h:265`):
+**Target calculation** from compact `nBits` (OpenSSL BigNum, `bignum.h`):
 ```
-size = (nBits >> 24) & 0xff           // number of bytes in the target
-byte1 = (nBits >> 16) & 0xff
-byte2 = (nBits >> 8) & 0xff
-byte3 = nBits & 0xff
-target = (byte1 * 256^2 + byte2 * 256 + byte3) * 256^(size - 3)
+SetCompact(nBits):
+  size  = (nBits >> 24) & 0xff
+  word  = nBits & 0x007fffff
+  target = word << (8 * (size - 3))
 ```
 
-The proof-of-work limit is `~uint256(0) >> 17` which has 17 leading zero bits.
-In compact form this is `0x1e7fffff`, meaning the easiest valid target is:
+**PoW limit**: `~uint256(0) >> 17` -- 17 leading zero bits minimum.
+
+In compact form `0x1e7fffff`:
 ```
 0x00007FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 ```
 
 ### Difficulty Adjustment
 
-Bitok adjusts difficulty every 2016 blocks based on the actual timespan of the previous 2016 blocks. The SPV client should verify that `nBits` in each header follows the expected adjustment schedule. The difficulty retargeting parameters are:
+(`main.cpp:927-972`)
 
-- Target block time: 10 minutes (600 seconds)
-- Target timespan: 2 weeks (1,209,600 seconds)
-- Retarget interval: 2016 blocks
-- Adjustment bounds: The difficulty cannot change by more than 4x in either direction per adjustment
+The node adjusts difficulty every **2016 blocks**:
 
-### Transaction Format
+1. If `(height + 1) % 2016 != 0`, use previous block's nBits unchanged
+2. At retarget boundary:
+   - `nActualTimespan = last_block.nTime - first_block_of_interval.nTime`
+   - Clamp: `nTargetTimespan/4 <= nActualTimespan <= nTargetTimespan*4`
+   - `new_target = old_target * nActualTimespan / nTargetTimespan`
+   - Cap at `bnProofOfWorkLimit`
 
-Bitok transactions use the same format as Bitcoin (Satoshi serialization):
+### Timewarp Protection
+
+(`main.cpp:1472-1511`)
+
+After block 16,000 (`TIMEWARP_ACTIVATION_HEIGHT`), the node enforces:
+- Block timestamp cannot exceed parent timestamp by more than `7200 + 3600` seconds (2h + 1h drift)
+- At difficulty adjustment boundaries, the actual timespan cannot be less than `nTargetTimespan / 8`
+
+An SPV client verifying headers should implement the same checks.
+
+---
+
+## Transaction Format
+
+Bitok transactions use standard Bitcoin Satoshi serialization (`main.h:386-648`):
 
 | Field | Type | Description |
 |-------|------|-------------|
 | nVersion | int32 | Transaction version (currently 1) |
 | vin_count | varint | Number of inputs |
-| vin | txin[] | Transaction inputs |
+| vin | CTxIn[] | Transaction inputs |
 | vout_count | varint | Number of outputs |
-| vout | txout[] | Transaction outputs |
+| vout | CTxOut[] | Transaction outputs |
 | nLockTime | uint32 | Lock time |
 
-**TxIn format**:
+**CTxIn** (`main.h:222-294`):
 | Field | Type | Description |
 |-------|------|-------------|
-| prevout_hash | uint256 | Previous transaction hash |
-| prevout_n | uint32 | Previous output index |
-| scriptSig_len | varint | Length of signature script |
-| scriptSig | uint8[] | Signature script |
-| nSequence | uint32 | Sequence number |
+| prevout.hash | uint256 | Previous transaction hash |
+| prevout.n | uint32 | Previous output index |
+| scriptSig | varint + bytes | Signature script |
+| nSequence | uint32 | Sequence number (UINT_MAX = final) |
 
-**TxOut format**:
+**CTxOut** (`main.h:303-377`):
 | Field | Type | Description |
 |-------|------|-------------|
-| nValue | int64 | Amount in satoshis |
-| scriptPubKey_len | varint | Length of pubkey script |
-| scriptPubKey | uint8[] | Public key script |
+| nValue | int64 | Amount in satoshis (1 BITOK = 100,000,000 satoshis) |
+| scriptPubKey | varint + bytes | Public key script |
+
+**Transaction hash**: `SHA256d(serialized_tx)` -- used as txid.
+
+### Fee Structure
+
+(`main.h:547-569`)
+
+- Base fee: 1 CENT (0.01 BITOK) per kilobyte
+- Transactions under 60KB are free if block size is under 80KB
+- Transactions under 3KB are free if block size is under 200KB
+- If any output is less than 0.01 BITOK (dust), minimum 0.01 BITOK fee applies
+- 1 CENT = 1,000,000 satoshis
+
+### Script Types
+
+(`script.cpp:912-971`, `rpc.cpp:28-56`)
+
+The node recognizes two standard output script patterns:
+
+**P2PKH** (Pay to Public Key Hash):
+```
+OP_DUP OP_HASH160 <20-byte-hash160> OP_EQUALVERIFY OP_CHECKSIG
+```
+
+**P2PK** (Pay to Public Key):
+```
+<33-byte-compressed-pubkey> OP_CHECKSIG
+<65-byte-uncompressed-pubkey> OP_CHECKSIG
+```
 
 ### Address Format
 
-Bitok uses the same address format as early Bitcoin:
 - **Version byte**: 0x00 (mainnet)
-- **Format**: Base58Check(version_byte + Hash160(pubkey))
+- **Format**: Base58Check(0x00 + Hash160(pubkey))
 - **Hash160**: RIPEMD160(SHA256(pubkey))
+- Both compressed (33-byte) and uncompressed (65-byte) public keys are supported
 
-### Network Parameters
+---
 
-| Parameter | Value |
-|-----------|-------|
-| Default P2P port | 18333 |
-| Default RPC port | 8332 |
-| Protocol version | 319 |
-| Magic bytes | `0xb4 0x0b 0xc0 0xde` |
-| Genesis block hash | `0x0290400ea28d3fe79d102ca6b7cd11cee5eba9f17f2046c303d92f65d6ed2617` |
-| Max block size | 1,000,000 bytes |
-| Block time target | 10 minutes (600 seconds) |
-| Subsidy halving | Every 210,000 blocks |
-| PoW algorithm | Yespower (N=2048, R=32) |
+## Recommended Architecture for Light Wallet
 
-### Message Header Format
+### Option A: Indexer-Backed Web Wallet (Practical)
 
-All P2P messages use this header:
+Best for reaching the most users with the least friction.
 
-| Field | Size | Description |
-|-------|------|-------------|
-| magic | 4 bytes | Network magic bytes (`0xb4 0x0b 0xc0 0xde`) |
-| command | 12 bytes | Command name (null-padded ASCII) |
-| length | 4 bytes | Payload size |
-| checksum | 4 bytes | First 4 bytes of SHA256(SHA256(payload)) |
+```
++------------------+
+|    Web Wallet    |  React + Vite + TypeScript
+|    (Browser)     |
++------------------+
+         |  HTTPS/JSON API
++------------------+
+|  Indexer API     |  Edge Functions / Node.js service
++------------------+
+         |  SQL
++------------------+
+|  Index Database  |  Postgres (Supabase)
++------------------+  Tables: blocks, transactions, utxos, address_history
+         |  JSON-RPC
++------------------+
+|  Bitok Full Node |  Standard bitok daemon
++------------------+
+```
 
-### Checkpoints
+**Wallet client stack**:
+| Component | Technology |
+|-----------|-----------|
+| UI framework | React + Vite + TypeScript |
+| Crypto (signing) | `@noble/secp256k1` |
+| Crypto (hashing) | `@noble/hashes` (SHA256, RIPEMD160) |
+| Key derivation | `@scure/bip32` + `@scure/bip39` (HD wallet) |
+| Address encoding | `bs58check` or custom Base58Check (~50 lines) |
+| Header verification | Yespower compiled to WASM via Emscripten |
+| Local storage | IndexedDB for header cache |
 
-The SPV client should include known checkpoints to prevent long-range attacks:
+**Indexer responsibilities**:
+1. Poll node via `getblockhash` + `getblock` to discover new blocks
+2. For each block, fetch full transactions via `getrawtransaction`
+3. Parse outputs to extract addresses, store UTXOs by address
+4. Track spent outputs by matching inputs to existing UTXOs
+5. Expose REST API: `GET /utxos/:address`, `GET /balance/:address`, `GET /history/:address`
+6. Proxy `sendrawtransaction` to the node for broadcasting
 
-| Height | Hash |
-|--------|------|
-| 0 | `0x0290400ea28d3fe79d102ca6b7cd11cee5eba9f17f2046c303d92f65d6ed2617` |
-| 6666 | `0xe4845bb3b5426ace955dea347359030656921883d8723105e4ab79343c27cdca` |
-| 14000 | `0x10bb78b6ff9825b407f8d30e41f0aee7664759573382875dcf12bb947082c747` |
+### Option B: True P2P SPV Client (Decentralized)
+
+Requires implementing the binary P2P protocol but eliminates the indexer dependency.
+
+```
++------------------+
+|    UI Layer      |
++------------------+
+         |
++------------------+
+|  Wallet Manager  |  Key generation, HD derivation, UTXO tracking
++------------------+
+         |
++------------------+
+|  TX Builder      |  UTXO selection, transaction construction, signing
++------------------+
+         |
++------------------+
+|  SPV Engine      |  Header sync, Merkle verification, bloom filter management
++------------------+
+         |
++------------------+
+|  P2P Network     |  WebSocket bridge (browser) or raw TCP (desktop)
++------------------+
+         |
++------------------+
+|  Header Store    |  IndexedDB (browser) or SQLite (desktop)
++------------------+
+```
+
+**P2P SPV requires a WebSocket-to-TCP bridge** for browser-based wallets since browsers cannot open raw TCP connections to port 18333. Desktop wallets (Rust/Tauri) can connect directly.
+
+### Synchronization Flow (P2P SPV)
+
+1. **Connect**: Send `version` with services=0 (SPV client), receive `verack`
+
+2. **Header sync**:
+   - Build block locator from stored headers (or genesis if first sync)
+   - Send `getheaders` with locator
+   - Receive up to 2000 headers per response
+   - Validate each header:
+     - `hashPrevBlock` chains correctly
+     - `GetPoWHash(header) <= target_from_nBits` (Yespower)
+     - Timestamp > median of previous 11 blocks
+     - nBits matches expected difficulty at retarget boundaries
+     - After height 16000: timewarp protection rules
+   - Repeat until < 2000 headers received
+
+3. **Bloom filter setup**:
+   - Construct filter containing:
+     - All wallet Hash160 values (for P2PKH detection)
+     - All wallet public keys (for P2PK detection)
+     - All tracked outpoints (for spend detection)
+   - Send `filterload`
+
+4. **Transaction discovery**:
+   - Send `mempool` to discover unconfirmed matching transactions
+   - For historical blocks since last sync, send `getdata` with `MSG_FILTERED_BLOCK`
+   - Receive `merkleblock` + matching `tx` messages
+   - Verify each merkleblock Merkle proof
+   - Build local UTXO set from matched transactions
+
+5. **Ongoing monitoring**:
+   - Listen for `inv` messages for new blocks
+   - Request new blocks via `getdata` with `MSG_FILTERED_BLOCK`
+   - Update local UTXO set
+   - When generating new addresses, send `filteradd`
 
 ---
 
@@ -428,29 +629,31 @@ Bloom filters leak information about which addresses the client owns:
 - Use a false-positive rate of at least 0.001 (0.1%)
 - Connect to multiple nodes with different filters
 - Consider adding decoy entries to the filter
-- Periodically disconnect and reconnect with new filters
+- Periodically disconnect and reconnect with fresh filters
+- The indexer-backed approach (Option A) has similar privacy tradeoffs -- the indexer sees which addresses the wallet queries
 
 ---
 
 ## Security Considerations
 
 1. **Eclipse attacks**: Connect to multiple independent peers to reduce risk of being fed a fake chain
-2. **Header-only attacks**: Always verify PoW on headers; reject chains with insufficient cumulative work
+2. **Header-only attacks**: Always verify Yespower PoW on headers; reject chains with insufficient cumulative work
 3. **Transaction withholding**: A malicious node can omit transactions from merkleblock responses. Connect to multiple peers for redundancy
 4. **Bloom filter privacy**: See privacy section above
 5. **Minimum confirmations**: Wait for at least 6 confirmations before considering a payment final
+6. **Timewarp validation**: Enforce the timewarp protection rules for headers after block 16,000
+7. **Indexer trust**: If using an indexer (Option A), the wallet trusts the indexer for balance accuracy. Merkle proofs from `gettxoutproof` can verify individual transactions independently
 
 ---
 
-## Files Modified in Node
+## Files Modified in Node for SPV Support
 
 | File | Changes |
 |------|---------|
-| `bloom.h` | New - Bloom filter implementation (`CBloomFilter`) |
-| `merkleblock.h` | New - Partial Merkle tree and merkle block (`CPartialMerkleTree`, `CMerkleBlock`) |
-| `main.h` | Added `CNode` forward declaration, `CBlockLocator::IsNull()` method |
-| `main.cpp` | Added P2P handlers: `getheaders`, `headers`, `filterload`, `filteradd`, `filterclear`, `mempool`; Updated `getdata` for `MSG_FILTERED_BLOCK`; Updated `AlreadyHave` for filtered blocks |
-| `net.h` | Added `MSG_FILTERED_BLOCK` inventory type; Added bloom filter state to `CNode` (`pfilter`, `cs_filter`); Updated `ppszTypeName` array |
-| `rpc.cpp` | Added RPC commands: `getblockheader`, `sendrawtransaction`, `gettxoutproof`, `verifytxoutproof` |
-| `headers.h` | Added includes for `bloom.h` and `merkleblock.h` |
-| `makefile.*` | Added new header files to HEADERS dependency list |
+| `bloom.h` | Bloom filter implementation (`CBloomFilter`) with custom hash function |
+| `merkleblock.h` | Partial Merkle tree (`CPartialMerkleTree`) and merkle block (`CMerkleBlock`) |
+| `main.h` | `CNode` forward declaration, `CBlockLocator::IsNull()` |
+| `main.cpp` | P2P handlers: `getheaders`, `headers`, `filterload`, `filteradd`, `filterclear`, `mempool`; `getdata` support for `MSG_FILTERED_BLOCK` |
+| `net.h` | `MSG_FILTERED_BLOCK` inventory type (3); `CBloomFilter* pfilter` and `cs_filter` on `CNode` |
+| `rpc.cpp` | RPC commands: `getblockheader`, `sendrawtransaction`, `gettxoutproof`, `verifytxoutproof`, `dumpprivkey`, `importprivkey` |
+| `headers.h` | Includes for `bloom.h` and `merkleblock.h` |
