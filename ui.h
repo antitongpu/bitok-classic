@@ -288,6 +288,7 @@ protected:
     void OnListItemActivated(wxListEvent& event);
     void OnButtonDelete(wxCommandEvent& event);
     void OnButtonCopy(wxCommandEvent& event);
+    void OnButtonExport(wxCommandEvent& event);
     void OnButtonEdit(wxCommandEvent& event);
     void OnButtonNew(wxCommandEvent& event);
     void OnButtonOK(wxCommandEvent& event);

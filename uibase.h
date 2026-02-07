@@ -71,6 +71,7 @@
 #define wxID_TEXTCTRL 1023
 #define wxID_BUTTONGENERATECOINS 1024
 #define wxID_BUTTONSETTINGS 1025
+#define wxID_BUTTONEXPORTKEY 1026
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class CMainFrameBase
@@ -376,10 +377,11 @@ class CAddressBookDialogBase : public wxDialog
 		
 		wxButton* m_buttonDelete;
 		wxButton* m_buttonCopy;
+		wxButton* m_buttonExport;
 		wxButton* m_buttonEdit;
 		wxButton* m_buttonNew;
 		wxButton* m_buttonOK;
-		
+
 		// Virtual event handlers, overide them in your derived class
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnNotebookPageChanged( wxNotebookEvent& event ){ event.Skip(); }
@@ -388,6 +390,7 @@ class CAddressBookDialogBase : public wxDialog
 		virtual void OnListItemSelected( wxListEvent& event ){ event.Skip(); }
 		virtual void OnButtonDelete( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonCopy( wxCommandEvent& event ){ event.Skip(); }
+		virtual void OnButtonExport( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonEdit( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonNew( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonOK( wxCommandEvent& event ){ event.Skip(); }

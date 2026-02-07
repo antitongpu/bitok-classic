@@ -245,6 +245,7 @@ getgenerate
 setgenerate <generate> [genproclimit]
 getinfo
 getnewaddress [label]
+rescanwallet
 ...
 ```
 
@@ -772,6 +773,7 @@ Imports a WIF-encoded private key into the wallet.
 **Parameters:**
 - `privkey` (string, required) - The WIF-encoded private key (as returned by `dumpprivkey`)
 - `label` (string, optional) - Label to assign to the imported address
+- `rescan` (boolean, optional, default=true) - If true, rescans the blockchain for transactions belonging to the imported key
 
 **Returns:** String (the Bitok address corresponding to the imported key)
 
@@ -779,6 +781,7 @@ Imports a WIF-encoded private key into the wallet.
 ```bash
 ./bitokd importprivkey "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ"
 ./bitokd importprivkey "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ" "imported_savings"
+./bitokd importprivkey "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ" "imported_savings" false
 ```
 
 **Response:**
@@ -793,11 +796,17 @@ def import_keys_from_backup(rpc, key_backup):
     imported = []
     for label, wif in key_backup.items():
         try:
-            address = rpc.call('importprivkey', [wif, label])
+            # Disable rescan for each key, rescan once at the end
+            address = rpc.call('importprivkey', [wif, label, False])
             imported.append(address)
             print(f"Imported {address} ({label})")
         except Exception as e:
             print(f"Failed to import key for {label}: {e}")
+
+    # Rescan once after all keys are imported
+    if imported:
+        rpc.call('rescanwallet')
+
     return imported
 ```
 
@@ -805,6 +814,48 @@ def import_keys_from_backup(rpc, key_backup):
 - The WIF key must start with version byte 0x80 (128 decimal)
 - After importing, the wallet contains the key immediately and can spend funds associated with it
 - Use a descriptive label so you can identify the imported address later
+- When importing multiple keys, set `rescan` to `false` for each key and call `rescanwallet` once at the end to avoid rescanning the entire blockchain for every key
+
+---
+
+### rescanwallet
+
+Rescans the blockchain for transactions belonging to wallet keys. Useful after importing private keys with `rescan=false`, or if wallet transactions appear to be missing.
+
+**Parameters:** None
+
+**Returns:** Object containing:
+- `found` (number) - Number of new transactions discovered
+
+**Example:**
+```bash
+./bitokd rescanwallet
+```
+
+**Response:**
+```json
+{
+  "found": 3
+}
+```
+
+**Use Case - Batch Key Import:**
+```python
+def batch_import_keys(rpc, keys):
+    """Import multiple keys efficiently with a single rescan"""
+    for label, wif in keys.items():
+        rpc.call('importprivkey', [wif, label, False])
+
+    # Single rescan after all imports
+    result = rpc.call('rescanwallet')
+    print(f"Rescan found {result['found']} transactions")
+```
+
+**Important Notes:**
+- This scans every block from genesis, so it can take a while on large blockchains
+- The wallet state (wallet.dat) is updated with any newly discovered transactions
+- The blockchain itself is not modified -- only the wallet is affected
+- Safe to run at any time; it will not duplicate existing wallet transactions
 
 ---
 
@@ -2561,6 +2612,7 @@ def send_with_logging(rpc, address, amount, user_id):
 | getaddressesbylabel | Wallet | Get addresses by label |
 | dumpprivkey | Wallet | Export private key in WIF format |
 | importprivkey | Wallet | Import WIF-encoded private key |
+| rescanwallet | Wallet | Rescan blockchain for wallet transactions |
 | sendtoaddress | Transaction | Send coins |
 | listtransactions | Transaction | List recent transactions |
 | listunspent | Wallet | List unspent transaction outputs (UTXOs) |

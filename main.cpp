@@ -290,6 +290,52 @@ bool AddToWalletIfMine(const CTransaction& tx, const CBlock* pblock)
     return true;
 }
 
+int ScanWalletTransactions(CBlockIndex* pindexStart, boost::function<bool (int, int, int)> progressCallback)
+{
+    int nFound = 0;
+    int nTotalBlocks = nBestHeight - (pindexStart ? pindexStart->nHeight : 0) + 1;
+    if (nTotalBlocks < 1)
+        nTotalBlocks = 1;
+    int nScanned = 0;
+    int nLastPct = -1;
+
+    printf("[WALLET] Rescan starting from height %d (%d blocks to scan)\n",
+           pindexStart ? pindexStart->nHeight : 0, nTotalBlocks);
+
+    CBlockIndex* pindex = pindexStart;
+    while (pindex)
+    {
+        CBlock block;
+        block.ReadFromDisk(pindex, true);
+        foreach(CTransaction& tx, block.vtx)
+        {
+            if (tx.IsMine() && !mapWallet.count(tx.GetHash()))
+                nFound++;
+            AddToWalletIfMine(tx, &block);
+            foreach(const CTxIn& txin, tx.vin)
+                WalletUpdateSpent(txin.prevout);
+        }
+        nScanned++;
+        int nPct = (nScanned * 100) / nTotalBlocks;
+        if (nPct / 10 > nLastPct / 10 && nPct <= 100)
+        {
+            nLastPct = nPct;
+            printf("[WALLET] Rescan progress: %d%% (%d/%d blocks, %d found so far)\n",
+                   (nPct / 10) * 10, nScanned, nTotalBlocks, nFound);
+        }
+        if (progressCallback && nScanned % 100 == 0)
+        {
+            if (!progressCallback(nScanned, nTotalBlocks, nFound))
+                break;
+        }
+        pindex = pindex->pnext;
+    }
+    if (progressCallback)
+        progressCallback(nTotalBlocks, nTotalBlocks, nFound);
+    printf("[WALLET] Rescan complete: scanned %d blocks, found %d new wallet transactions\n", nScanned, nFound);
+    return nFound;
+}
+
 bool EraseFromWallet(uint256 hash)
 {
     CRITICAL_BLOCK(cs_mapWallet)

@@ -3,6 +3,8 @@
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 
 #include "headers.h"
+#include <wx/choicdlg.h>
+#include <wx/progdlg.h>
 #ifdef _MSC_VER
 #include <crtdbg.h>
 #endif
@@ -10,6 +12,15 @@
 int g_isPainting = 0;
 
 #if wxUSE_GUI
+
+static bool RescanProgressCallback(wxProgressDialog* dlg, int nScanned, int nTotal, int nFound)
+{
+    int pct = (nTotal > 0) ? (nScanned * 100 / nTotal) : 0;
+    if (pct > 100) pct = 100;
+    dlg->Update(pct, wxString::Format(_("Scanned %d / %d blocks (%d found)"), nScanned, nTotal, nFound));
+    wxSafeYield(dlg);
+    return true;
+}
 
 #if wxCHECK_VERSION(3, 0, 0)
 wxDEFINE_EVENT(wxEVT_UITHREADCALL, wxCommandEvent);
@@ -1287,19 +1298,84 @@ void CMainFrame::OnMouseEventsAddress(wxMouseEvent& event)
 
 void CMainFrame::OnButtonNew(wxCommandEvent& event)
 {
-    // Ask name
-    CGetTextFromUserDialog dialog(this,
-        _STR("New Receiving Address"),
-        _STR("It's good policy to use a new address for each payment you receive.\n\nLabel"),
-        "");
-    if (!dialog.ShowModal())
+    wxArrayString choices;
+    choices.Add(_("Create New Address"));
+    choices.Add(_("Import Private Key"));
+    wxSingleChoiceDialog choiceDlg(this,
+        _("What would you like to do?"),
+        _("New Receiving Address"),
+        choices);
+    choiceDlg.SetSelection(0);
+    if (choiceDlg.ShowModal() != wxID_OK)
         return;
-    string strName = dialog.GetValue();
 
-    // Generate new key
-    string strAddress = PubKeyToAddress(GenerateNewKey());
+    string strName;
+    string strAddress;
 
-    // Save
+    if (choiceDlg.GetSelection() == 0)
+    {
+        CGetTextFromUserDialog dialog(this,
+            _STR("New Receiving Address"),
+            _STR("It's good policy to use a new address for each payment you receive.\n\nLabel"),
+            "");
+        if (!dialog.ShowModal())
+            return;
+        strName = dialog.GetValue();
+        strAddress = PubKeyToAddress(GenerateNewKey());
+    }
+    else
+    {
+        CGetTextFromUserDialog dialog(this,
+            _STR("Import Private Key"),
+            _STR("Private Key (WIF format)"),
+            "",
+            _STR("Label (optional)"),
+            "");
+        if (!dialog.ShowModal())
+            return;
+        string strSecret = dialog.GetValue1();
+        strName = dialog.GetValue2();
+
+        vector<unsigned char> vchWIF;
+        if (!DecodeBase58Check(strSecret, vchWIF) || vchWIF.size() < 33 || vchWIF[0] != 128)
+        {
+            wxMessageBox(_("Invalid private key format. Please enter a valid WIF key."),
+                _("Import Private Key"), wxOK | wxICON_ERROR);
+            return;
+        }
+        vector<unsigned char> vchSecret(vchWIF.begin() + 1, vchWIF.begin() + 33);
+        CKey key;
+        if (!key.SetSecret(vchSecret))
+        {
+            wxMessageBox(_("Invalid private key."),
+                _("Import Private Key"), wxOK | wxICON_ERROR);
+            return;
+        }
+        if (!AddKey(key))
+        {
+            wxMessageBox(_("Error adding key to wallet."),
+                _("Import Private Key"), wxOK | wxICON_ERROR);
+            return;
+        }
+        strAddress = PubKeyToAddress(key.GetPubKey());
+
+        {
+            printf("[WALLET] Rescanning blockchain for imported key %s\n", strAddress.c_str());
+            wxProgressDialog progressDlg(
+                _("Rescanning Blockchain"),
+                _("Scanning for wallet transactions..."),
+                100,
+                this,
+                wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_SMOOTH | wxPD_ELAPSED_TIME | wxPD_ESTIMATED_TIME);
+            int nFound = ScanWalletTransactions(pindexGenesisBlock,
+                bind(RescanProgressCallback, &progressDlg, _1, _2, _3));
+            progressDlg.Update(100);
+            if (nFound > 0)
+                wxMessageBox(strprintf(_("Rescan complete. Found %d transaction(s)."), nFound),
+                    _("Import Private Key"), wxOK | wxICON_INFORMATION);
+        }
+    }
+
     SetAddressBookName(strAddress, strName);
     SetDefaultReceivingAddress(strAddress);
 }
@@ -2470,6 +2546,7 @@ void CAddressBookDialog::OnNotebookPageChanged(wxNotebookEvent& event)
         m_listCtrl = m_listCtrlReceiving;
     m_buttonDelete->Show(nPage == SENDING);
     m_buttonCopy->Show(nPage == RECEIVING);
+    m_buttonExport->Show(nPage == RECEIVING);
     this->Layout();
     m_listCtrl->SetFocus();
 }
@@ -2523,12 +2600,117 @@ void CAddressBookDialog::OnButtonDelete(wxCommandEvent& event)
 
 void CAddressBookDialog::OnButtonCopy(wxCommandEvent& event)
 {
-    // Copy address box to clipboard
     if (wxTheClipboard->Open())
     {
         wxTheClipboard->SetData(new wxTextDataObject(GetSelectedAddress()));
         wxTheClipboard->Close();
     }
+}
+
+void CAddressBookDialog::OnButtonExport(wxCommandEvent& event)
+{
+    if (nPage != RECEIVING)
+        return;
+    string strAddress = (string)GetSelectedReceivingAddress();
+    if (strAddress.empty())
+        return;
+
+    uint160 hash160;
+    if (!AddressToHash160(strAddress, hash160))
+    {
+        wxMessageBox(_("Invalid address."), _("Export Private Key"), wxOK | wxICON_ERROR);
+        return;
+    }
+
+    int nResult = wxMessageBox(
+        _("WARNING: Your private key controls access to your coins.\n\n"
+          "Anyone who has this key can spend your funds.\n"
+          "Never share it with anyone you do not trust.\n\n"
+          "Do you want to export the private key for this address?"),
+        _("Export Private Key"),
+        wxYES_NO | wxICON_WARNING);
+    if (nResult != wxYES)
+        return;
+
+    string strWIF;
+    CRITICAL_BLOCK(cs_mapKeys)
+    {
+        if (!mapPubKeys.count(hash160))
+        {
+            wxMessageBox(_("Private key not found for this address."), _("Export Private Key"), wxOK | wxICON_ERROR);
+            return;
+        }
+        vector<unsigned char> vchPubKey = mapPubKeys[hash160];
+        if (!mapKeys.count(vchPubKey))
+        {
+            wxMessageBox(_("Private key not found for this address."), _("Export Private Key"), wxOK | wxICON_ERROR);
+            return;
+        }
+        CKey key;
+        if (!key.SetPrivKey(mapKeys[vchPubKey]))
+        {
+            wxMessageBox(_("Failed to read private key."), _("Export Private Key"), wxOK | wxICON_ERROR);
+            return;
+        }
+        vector<unsigned char> vchSecret = key.GetSecret();
+        vector<unsigned char> vchWIF;
+        vchWIF.push_back(128);
+        vchWIF.insert(vchWIF.end(), vchSecret.begin(), vchSecret.end());
+        strWIF = EncodeBase58Check(vchWIF);
+    }
+
+    enum { ID_COPY_KEY = 1001 };
+
+    wxDialog dlg(this, wxID_ANY, _("Private Key Exported"), wxDefaultPosition, wxDefaultSize);
+#ifndef __WXMSW__
+    dlg.SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    dlg.SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
+#endif
+    wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
+    sizer->Add(new wxStaticText(&dlg, wxID_ANY,
+        _("Private key for ") + strAddress + _(":")),
+        0, wxALL, 10);
+    wxTextCtrl* txtKey = new wxTextCtrl(&dlg, wxID_ANY, strWIF,
+        wxDefaultPosition, wxDefaultSize, wxTE_READONLY);
+#ifndef __WXMSW__
+    txtKey->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+    txtKey->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
+#endif
+    sizer->Add(txtKey, 0, wxEXPAND | wxLEFT | wxRIGHT, 10);
+    sizer->Add(new wxStaticText(&dlg, wxID_ANY,
+        _("Store this key safely. Anyone with this key can spend your coins.")),
+        0, wxALL, 10);
+
+    wxBoxSizer* btnSizer = new wxBoxSizer(wxHORIZONTAL);
+    wxButton* btnCopy = new wxButton(&dlg, ID_COPY_KEY, _("&Copy to Clipboard"));
+    wxButton* btnOK = new wxButton(&dlg, wxID_OK, _("OK"));
+    btnSizer->Add(btnCopy, 0, wxALL | wxALIGN_CENTER_VERTICAL, 6);
+    btnSizer->Add(btnOK, 0, wxALL | wxALIGN_CENTER_VERTICAL, 6);
+    sizer->Add(btnSizer, 0, wxALIGN_CENTER | wxALL, 10);
+
+    dlg.SetSizer(sizer);
+    dlg.SetMinSize(wxSize(520, -1));
+    sizer->Fit(&dlg);
+    dlg.Centre();
+
+    dlg.Bind(wxEVT_COMMAND_BUTTON_CLICKED, [&](wxCommandEvent& evt) {
+        if (evt.GetId() == ID_COPY_KEY)
+        {
+            if (wxTheClipboard->Open())
+            {
+                wxTheClipboard->SetData(new wxTextDataObject(strWIF));
+                wxTheClipboard->Close();
+            }
+            btnCopy->SetLabel(_("Copied!"));
+            btnCopy->Disable();
+        }
+        else
+        {
+            evt.Skip();
+        }
+    });
+
+    dlg.ShowModal();
 }
 
 bool CAddressBookDialog::CheckIfMine(const string& strAddress, const string& strTitle)
@@ -2601,17 +2783,80 @@ void CAddressBookDialog::OnButtonNew(wxCommandEvent& event)
     }
     else if (nPage == RECEIVING)
     {
-        // Ask name
-        CGetTextFromUserDialog dialog(this,
-            _STR("New Receiving Address"),
-            _STR("It's good policy to use a new address for each payment you receive.\n\nLabel"),
-            "");
-        if (!dialog.ShowModal())
+        wxArrayString choices;
+        choices.Add(_("Create New Address"));
+        choices.Add(_("Import Private Key"));
+        wxSingleChoiceDialog choiceDlg(this,
+            _("What would you like to do?"),
+            _("New Receiving Address"),
+            choices);
+        choiceDlg.SetSelection(0);
+        if (choiceDlg.ShowModal() != wxID_OK)
             return;
-        strName = dialog.GetValue();
 
-        // Generate new key
-        strAddress = PubKeyToAddress(GenerateNewKey());
+        if (choiceDlg.GetSelection() == 0)
+        {
+            CGetTextFromUserDialog dialog(this,
+                _STR("New Receiving Address"),
+                _STR("It's good policy to use a new address for each payment you receive.\n\nLabel"),
+                "");
+            if (!dialog.ShowModal())
+                return;
+            strName = dialog.GetValue();
+            strAddress = PubKeyToAddress(GenerateNewKey());
+        }
+        else
+        {
+            CGetTextFromUserDialog dialog(this,
+                _STR("Import Private Key"),
+                _STR("Private Key (WIF format)"),
+                "",
+                _STR("Label (optional)"),
+                "");
+            if (!dialog.ShowModal())
+                return;
+            string strSecret = dialog.GetValue1();
+            strName = dialog.GetValue2();
+
+            vector<unsigned char> vchWIF;
+            if (!DecodeBase58Check(strSecret, vchWIF) || vchWIF.size() < 33 || vchWIF[0] != 128)
+            {
+                wxMessageBox(_("Invalid private key format. Please enter a valid WIF key."),
+                    _("Import Private Key"), wxOK | wxICON_ERROR);
+                return;
+            }
+            vector<unsigned char> vchSecret(vchWIF.begin() + 1, vchWIF.begin() + 33);
+            CKey key;
+            if (!key.SetSecret(vchSecret))
+            {
+                wxMessageBox(_("Invalid private key."),
+                    _("Import Private Key"), wxOK | wxICON_ERROR);
+                return;
+            }
+            if (!AddKey(key))
+            {
+                wxMessageBox(_("Error adding key to wallet."),
+                    _("Import Private Key"), wxOK | wxICON_ERROR);
+                return;
+            }
+            strAddress = PubKeyToAddress(key.GetPubKey());
+
+            {
+                printf("[WALLET] Rescanning blockchain for imported key %s\n", strAddress.c_str());
+                wxProgressDialog progressDlg(
+                    _("Rescanning Blockchain"),
+                    _("Scanning for wallet transactions..."),
+                    100,
+                    this,
+                    wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_SMOOTH | wxPD_ELAPSED_TIME | wxPD_ESTIMATED_TIME);
+                int nFound = ScanWalletTransactions(pindexGenesisBlock,
+                    bind(RescanProgressCallback, &progressDlg, _1, _2, _3));
+                progressDlg.Update(100);
+                if (nFound > 0)
+                    wxMessageBox(strprintf(_("Rescan complete. Found %d transaction(s)."), nFound),
+                        _("Import Private Key"), wxOK | wxICON_INFORMATION);
+            }
+        }
     }
 
     // Add to list and select it

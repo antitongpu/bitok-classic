@@ -1704,15 +1704,19 @@ Value dumpprivkey(const Array& params, bool fHelp)
 
 Value importprivkey(const Array& params, bool fHelp)
 {
-    if (fHelp || params.size() < 1 || params.size() > 2)
+    if (fHelp || params.size() < 1 || params.size() > 3)
         throw runtime_error(
-            "importprivkey <bitokprivkey> [label]\n"
-            "Adds a private key (as returned by dumpprivkey) to your wallet.");
+            "importprivkey <bitokprivkey> [label] [rescan=true]\n"
+            "Adds a private key (as returned by dumpprivkey) to your wallet.\n"
+            "If rescan is true (default), the blockchain will be rescanned for transactions.");
 
     string strSecret = params[0].get_str();
     string strLabel;
     if (params.size() > 1)
         strLabel = params[1].get_str();
+    bool fRescan = true;
+    if (params.size() > 2)
+        fRescan = params[2].get_bool();
 
     vector<unsigned char> vchWIF;
     if (!DecodeBase58Check(strSecret, vchWIF))
@@ -1733,7 +1737,30 @@ Value importprivkey(const Array& params, bool fHelp)
     if (!strLabel.empty())
         SetAddressBookName(strAddress, strLabel);
 
+    if (fRescan)
+    {
+        printf("[WALLET] Rescanning blockchain for imported key %s\n", strAddress.c_str());
+        ScanWalletTransactions(pindexGenesisBlock);
+    }
+
     return strAddress;
+}
+
+
+Value rescanwallet(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() > 0)
+        throw runtime_error(
+            "rescanwallet\n"
+            "Rescans the blockchain for wallet transactions.\n"
+            "This finds any transactions belonging to wallet keys that may be missing from the wallet.");
+
+    printf("[WALLET] Rescanning blockchain for all wallet transactions\n");
+    int nFound = ScanWalletTransactions(pindexGenesisBlock);
+
+    Object result;
+    result.push_back(Pair("found", nFound));
+    return result;
 }
 
 
@@ -1784,6 +1811,7 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("verifytxoutproof",      &verifytxoutproof),
     make_pair("dumpprivkey",           &dumpprivkey),
     make_pair("importprivkey",         &importprivkey),
+    make_pair("rescanwallet",          &rescanwallet),
 };
 map<string, rpcfn_type> mapCallTable(pCallTable, pCallTable + sizeof(pCallTable)/sizeof(pCallTable[0]));
 
