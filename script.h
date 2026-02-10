@@ -12,6 +12,52 @@ enum
     SIGHASH_ANYONECANPAY = 0x80,
 };
 
+enum
+{
+    SCRIPT_VERIFY_NONE      = 0,
+    SCRIPT_VERIFY_EXEC    = (1U << 0),
+};
+
+static const unsigned int MAX_SCRIPT_SIZE = 10000;
+static const unsigned int MAX_STACK_SIZE = 1000;
+static const unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520;
+static const unsigned int MAX_OPS_PER_SCRIPT = 201;
+static const unsigned int MAX_PUBKEYS_PER_MULTISIG = 20;
+static const unsigned int MAX_SIGOPS_PER_BLOCK = 20000;
+static const int MAX_BIGNUM_SIZE = 4;
+
+enum ScriptError
+{
+    SCRIPT_ERR_OK = 0,
+    SCRIPT_ERR_UNKNOWN,
+    SCRIPT_ERR_EVAL_FALSE,
+    SCRIPT_ERR_OP_RETURN,
+    SCRIPT_ERR_SCRIPT_SIZE,
+    SCRIPT_ERR_PUSH_SIZE,
+    SCRIPT_ERR_OP_COUNT,
+    SCRIPT_ERR_STACK_SIZE,
+    SCRIPT_ERR_SIG_COUNT,
+    SCRIPT_ERR_PUBKEY_COUNT,
+    SCRIPT_ERR_VERIFY,
+    SCRIPT_ERR_EQUALVERIFY,
+    SCRIPT_ERR_CHECKMULTISIGVERIFY,
+    SCRIPT_ERR_CHECKSIGVERIFY,
+    SCRIPT_ERR_NUMEQUALVERIFY,
+    SCRIPT_ERR_BAD_OPCODE,
+    SCRIPT_ERR_DISABLED_OPCODE,
+    SCRIPT_ERR_INVALID_STACK_OPERATION,
+    SCRIPT_ERR_INVALID_ALTSTACK_OPERATION,
+    SCRIPT_ERR_UNBALANCED_CONDITIONAL,
+    SCRIPT_ERR_SIG_DER,
+    SCRIPT_ERR_SIG_HASHTYPE,
+    SCRIPT_ERR_SIG_PUSHONLY,
+    SCRIPT_ERR_MINIMALDATA,
+    SCRIPT_ERR_NUMBER_OVERFLOW,
+    SCRIPT_ERR_DIV_BY_ZERO,
+    SCRIPT_ERR_IMPOSSIBLE_ENCODING,
+    SCRIPT_ERR_SHIFT_OVERFLOW,
+};
+
 
 
 enum opcodetype
@@ -472,11 +518,24 @@ public:
 
     bool GetOp(iterator& pc, opcodetype& opcodeRet, vector<unsigned char>& vchRet)
     {
-         // Wrapper so it can be called with either iterator or const_iterator
          const_iterator pc2 = pc;
          bool fRet = GetOp(pc2, opcodeRet, vchRet);
          pc = begin() + (pc2 - begin());
          return fRet;
+    }
+
+    bool GetOp(iterator& pc, opcodetype& opcodeRet)
+    {
+         const_iterator pc2 = pc;
+         bool fRet = GetOp(pc2, opcodeRet);
+         pc = begin() + (pc2 - begin());
+         return fRet;
+    }
+
+    bool GetOp(const_iterator& pc, opcodetype& opcodeRet) const
+    {
+        vector<unsigned char> vchRet;
+        return GetOp(pc, opcodeRet, vchRet);
     }
 
     bool GetOp(const_iterator& pc, opcodetype& opcodeRet, vector<unsigned char>& vchRet) const
@@ -647,11 +706,18 @@ public:
 
 
 
-bool EvalScript(const CScript& script, const CTransaction& txTo, unsigned int nIn, int nHashType=0,
-                vector<vector<unsigned char> >* pvStackRet=NULL);
+bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script,
+                const CTransaction& txTo, unsigned int nIn, int nHashType,
+                unsigned int flags);
 uint256 SignatureHash(CScript scriptCode, const CTransaction& txTo, unsigned int nIn, int nHashType);
 bool IsMine(const CScript& scriptPubKey);
 bool ExtractPubKey(const CScript& scriptPubKey, bool fMineOnly, vector<unsigned char>& vchPubKeyRet);
 bool ExtractHash160(const CScript& scriptPubKey, uint160& hash160Ret);
 bool SignSignature(const CTransaction& txFrom, CTransaction& txTo, unsigned int nIn, int nHashType=SIGHASH_ALL, CScript scriptPrereq=CScript());
-bool VerifySignature(const CTransaction& txFrom, const CTransaction& txTo, unsigned int nIn, int nHashType=0);
+bool VerifySignature(const CTransaction& txFrom, const CTransaction& txTo, unsigned int nIn, int nHashType, unsigned int flags);
+bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey,
+                  const CTransaction& txTo, unsigned int nIn, int nHashType,
+                  unsigned int flags);
+unsigned int GetSigOpCount(const CScript& script);
+bool CheckSignatureEncoding(const vector<unsigned char>& vchSig, unsigned int flags);
+bool CheckMinimalPush(const vector<unsigned char>& data, opcodetype opcode);

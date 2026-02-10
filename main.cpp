@@ -92,6 +92,7 @@ namespace Checkpoints
         (0, hashGenesisBlock)
         (6666, uint256("0xe4845bb3b5426ace955dea347359030656921883d8723105e4ab79343c27cdca"))
         (14000, uint256("0x10bb78b6ff9825b407f8d30e41f0aee7664759573382875dcf12bb947082c747"))
+        (16000, uint256("0xf3506cfb336359ccba2245c630010fd387c7b9fc1c5102b75bb15d9680d3be60"))
         ;
 
     bool CheckBlock(int nHeight, const uint256& hash)
@@ -134,13 +135,28 @@ namespace Checkpoints
 
 bool IsStandard(const CScript& scriptPubKey)
 {
-    // Standard tx with single pubkey:
-    // pubkey OP_CHECKSIG
+    if (nBestHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+    {
+        if (scriptPubKey.size() > MAX_SCRIPT_SIZE)
+            return false;
+
+        if (scriptPubKey.empty())
+            return false;
+
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        while (pc < scriptPubKey.end())
+        {
+            if (!scriptPubKey.GetOp(pc, opcode))
+                return false;
+        }
+
+        return true;
+    }
+
     if (scriptPubKey.size() == 35 && scriptPubKey[0] == 33 && scriptPubKey[34] == OP_CHECKSIG)
         return true;
 
-    // Standard tx with Bitcoin address:
-    // OP_DUP OP_HASH160 <hash160> OP_EQUALVERIFY OP_CHECKSIG
     if (scriptPubKey.size() == 25 &&
         scriptPubKey[0] == OP_DUP &&
         scriptPubKey[1] == OP_HASH160 &&
@@ -159,11 +175,16 @@ bool IsStandardTx(const CTransaction& tx)
 
     foreach(const CTxIn& txin, tx.vin)
     {
-        // Biggest 'standard' txin is a 3-signature 3-of-3 CHECKMULTISIG
-        // pay-to-script-hash, which is 3 ~80-byte signatures, 3
-        // ~65-byte public keys, plus a few script ops.
-        if (txin.scriptSig.size() > 500)
-            return false;
+        if (nBestHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+        {
+            if (txin.scriptSig.size() > MAX_SCRIPT_SIZE)
+                return false;
+        }
+        else
+        {
+            if (txin.scriptSig.size() > 500)
+                return false;
+        }
         if (!txin.scriptSig.IsPushOnly())
             return false;
     }
@@ -694,7 +715,7 @@ bool CTransaction::AcceptTransaction(CTxDB& txdb, bool fCheckInputs, bool* pfMis
     // Check against previous transactions
     map<uint256, CTxIndex> mapUnused;
     int64 nFees = 0;
-    if (fCheckInputs && !ConnectInputs(txdb, mapUnused, CDiskTxPos(1,1,1), 0, nFees, false, false))
+    if (fCheckInputs && !ConnectInputs(txdb, mapUnused, CDiskTxPos(1,1,1), nBestHeight + 1, nFees, false, false))
     {
         if (pfMissingInputs)
             *pfMissingInputs = true;
@@ -1115,7 +1136,10 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
                         return error("ConnectInputs() : tried to spend coinbase at depth %d", nBestHeight - pindex->nHeight);
 
             // Verify signature
-            if (!VerifySignature(txPrev, *this, i))
+            unsigned int nScriptFlags = SCRIPT_VERIFY_NONE;
+            if (nHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+                nScriptFlags |= SCRIPT_VERIFY_EXEC;
+            if (!VerifySignature(txPrev, *this, i, 0, nScriptFlags))
                 return error("ConnectInputs() : %s VerifySignature failed", GetHash().ToString().substr(0,6).c_str());
 
             // Check for conflicts
@@ -1180,7 +1204,10 @@ bool CTransaction::ClientConnectInputs()
                 return false;
 
             // Verify signature
-            if (!VerifySignature(txPrev, *this, i))
+            unsigned int nScriptFlags = SCRIPT_VERIFY_NONE;
+            if (nBestHeight + 1 >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+                nScriptFlags |= SCRIPT_VERIFY_EXEC;
+            if (!VerifySignature(txPrev, *this, i, 0, nScriptFlags))
                 return error("ConnectInputs() : VerifySignature failed");
 
             ///// this is redundant with the mapNextTx stuff, not sure which I want to get rid of
@@ -1481,9 +1508,18 @@ bool CBlock::CheckBlock() const
             return error("CheckBlock() : more than one coinbase");
 
     // Check transactions
+    unsigned int nSigOps = 0;
     foreach(const CTransaction& tx, vtx)
+    {
         if (!tx.CheckTransaction())
             return error("CheckBlock() : CheckTransaction failed");
+        foreach(const CTxIn& txin, tx.vin)
+            nSigOps += GetSigOpCount(txin.scriptSig);
+        foreach(const CTxOut& txout, tx.vout)
+            nSigOps += GetSigOpCount(txout.scriptPubKey);
+    }
+    if (nSigOps > MAX_SIGOPS_PER_BLOCK)
+        return error("CheckBlock() : too many sigops");
 
     // Check proof of work matches claimed amount
     if (CBigNum().SetCompact(nBits) > bnProofOfWorkLimit)
@@ -3285,8 +3321,9 @@ void BitcoinMiner()
                     // Transaction fee based on block size
                     int64 nMinFee = tx.GetMinFee(nBlockSize);
 
+                    int nTargetHeight = (pindexPrev ? pindexPrev->nHeight + 1 : 0);
                     map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
-                    if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), 0, nFees, false, true, nMinFee))
+                    if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), nTargetHeight, nFees, false, true, nMinFee))
                         continue;
                     swap(mapTestPool, mapTestPoolTmp);
 
@@ -3543,8 +3580,9 @@ CBlock* CreateNewBlock(CKey& key)
 
                 int64 nMinFee = tx.GetMinFee(nBlockSize);
 
+                int nTargetHeight = (pindexPrev ? pindexPrev->nHeight + 1 : 0);
                 map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
-                if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), 0, nFees, false, true, nMinFee))
+                if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), nTargetHeight, nFees, false, true, nMinFee))
                     continue;
                 swap(mapTestPool, mapTestPoolTmp);
 

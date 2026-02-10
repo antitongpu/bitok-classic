@@ -1158,10 +1158,13 @@ void ThreadOpenConnections2(void* parg)
                 if (!addr.IsIPv4() || !addr.IsValid() || setConnected.count(addr.ip))
                     continue;
 
+                int64 nSinceLastSeen = GetAdjustedTime() - addr.nTime;
+                if (addr.nTime > 0 && nSinceLastSeen > 12 * 60 * 60)
+                    continue;
+
                 uint16_t nGroup = addr.GetGroup();
                 if (mapGroupCounts[nGroup] >= MAX_OUTBOUND_PER_GROUP)
                     continue;
-                int64 nSinceLastSeen = GetAdjustedTime() - addr.nTime;
                 int64 nSinceLastTry = GetAdjustedTime() - addr.nLastTry;
 
                 // Randomize the order in a deterministic way, putting the standard port first
@@ -1191,16 +1194,6 @@ void ThreadOpenConnections2(void* parg)
 
                 // Limit retry frequency
                 if (nSinceLastTry < nDelay)
-                    continue;
-
-                // If we have IRC, we'll be notified when they first come online,
-                // and again every 24 hours by the refresh broadcast.
-                // Maintain at least 4 connections before being selective about old addresses
-                if (nGotIRCAddresses > 0 && vNodes.size() >= 4 && nSinceLastSeen > 24 * 60 * 60)
-                    continue;
-
-                // Only try the old stuff if we don't have enough connections
-                if (vNodes.size() >= 8 && nSinceLastSeen > 24 * 60 * 60)
                     continue;
 
                 // If multiple addresses are ready, prioritize by time since

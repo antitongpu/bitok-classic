@@ -505,12 +505,18 @@ Value getblocktemplate(const Array& params, bool fHelp)
         ssTx << tx;
 
         Object entry;
-        entry.push_back(Pair("data", HexStr(ssTx.begin(), ssTx.end())));
+        entry.push_back(Pair("data", HexStr(ssTx.begin(), ssTx.end(), false)));
         entry.push_back(Pair("txid", tx.GetHash().GetHex()));
         entry.push_back(Pair("hash", tx.GetHash().GetHex()));
+        unsigned int nTxSigOps = 0;
+        foreach(const CTxIn& txin, tx.vin)
+            nTxSigOps += GetSigOpCount(txin.scriptSig);
+        foreach(const CTxOut& txout, tx.vout)
+            nTxSigOps += GetSigOpCount(txout.scriptPubKey);
+
         entry.push_back(Pair("depends", Array()));
         entry.push_back(Pair("fee", (int64_t)0));
-        entry.push_back(Pair("sigops", (int64_t)0));
+        entry.push_back(Pair("sigops", (int64_t)nTxSigOps));
         transactions.push_back(entry);
     }
     result.push_back(Pair("transactions", transactions));
