@@ -92,6 +92,7 @@ namespace Checkpoints
         (0, hashGenesisBlock)
         (6666, uint256("0xe4845bb3b5426ace955dea347359030656921883d8723105e4ab79343c27cdca"))
         (14000, uint256("0x10bb78b6ff9825b407f8d30e41f0aee7664759573382875dcf12bb947082c747"))
+        (16000, uint256("0xf3506cfb336359ccba2245c630010fd387c7b9fc1c5102b75bb15d9680d3be60"))
         ;
 
     bool CheckBlock(int nHeight, const uint256& hash)
@@ -129,18 +130,82 @@ namespace Checkpoints
 
 //////////////////////////////////////////////////////////////////////////////
 //
+// Transaction Priority (Satoshi's coin-age formula)
+//
+// priority = sum(value_in * confirmations) / tx_size
+//
+
+double ComputePriority(const CTransaction& tx, CTxDB& txdb, int nHeight)
+{
+    if (tx.IsCoinBase())
+        return 0.0;
+
+    double dPriority = 0.0;
+    for (int i = 0; i < tx.vin.size(); i++)
+    {
+        COutPoint prevout = tx.vin[i].prevout;
+
+        CTransaction txPrev;
+        CTxIndex txindex;
+        if (txdb.ReadTxIndex(prevout.hash, txindex) && txPrev.ReadFromDisk(txindex.pos))
+        {
+            if (prevout.n < txPrev.vout.size())
+            {
+                int nInputHeight = 0;
+                CBlock block;
+                if (block.ReadFromDisk(txindex.pos.nFile, txindex.pos.nBlockPos, false))
+                {
+                    auto mi = mapBlockIndex.find(block.GetHash());
+                    if (mi != mapBlockIndex.end())
+                        nInputHeight = (*mi).second->nHeight;
+                }
+
+                int nConf = nHeight - nInputHeight;
+                if (nConf < 1)
+                    nConf = 1;
+
+                dPriority += (double)txPrev.vout[prevout.n].nValue * nConf;
+            }
+        }
+    }
+
+    unsigned int nTxSize = ::GetSerializeSize(tx, SER_NETWORK);
+    if (nTxSize == 0)
+        return 0.0;
+
+    return dPriority / nTxSize;
+}
+
+
+//////////////////////////////////////////////////////////////////////////////
+//
 // Transaction Standardness Check
 //
 
 bool IsStandard(const CScript& scriptPubKey)
 {
-    // Standard tx with single pubkey:
-    // pubkey OP_CHECKSIG
+    if (nBestHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+    {
+        if (scriptPubKey.size() > MAX_SCRIPT_SIZE)
+            return false;
+
+        if (scriptPubKey.empty())
+            return false;
+
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        while (pc < scriptPubKey.end())
+        {
+            if (!scriptPubKey.GetOp(pc, opcode))
+                return false;
+        }
+
+        return true;
+    }
+
     if (scriptPubKey.size() == 35 && scriptPubKey[0] == 33 && scriptPubKey[34] == OP_CHECKSIG)
         return true;
 
-    // Standard tx with Bitcoin address:
-    // OP_DUP OP_HASH160 <hash160> OP_EQUALVERIFY OP_CHECKSIG
     if (scriptPubKey.size() == 25 &&
         scriptPubKey[0] == OP_DUP &&
         scriptPubKey[1] == OP_HASH160 &&
@@ -159,11 +224,16 @@ bool IsStandardTx(const CTransaction& tx)
 
     foreach(const CTxIn& txin, tx.vin)
     {
-        // Biggest 'standard' txin is a 3-signature 3-of-3 CHECKMULTISIG
-        // pay-to-script-hash, which is 3 ~80-byte signatures, 3
-        // ~65-byte public keys, plus a few script ops.
-        if (txin.scriptSig.size() > 500)
-            return false;
+        if (nBestHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+        {
+            if (txin.scriptSig.size() > MAX_SCRIPT_SIZE)
+                return false;
+        }
+        else
+        {
+            if (txin.scriptSig.size() > 500)
+                return false;
+        }
         if (!txin.scriptSig.IsPushOnly())
             return false;
     }
@@ -694,11 +764,22 @@ bool CTransaction::AcceptTransaction(CTxDB& txdb, bool fCheckInputs, bool* pfMis
     // Check against previous transactions
     map<uint256, CTxIndex> mapUnused;
     int64 nFees = 0;
-    if (fCheckInputs && !ConnectInputs(txdb, mapUnused, CDiskTxPos(1,1,1), 0, nFees, false, false))
+    if (fCheckInputs && !ConnectInputs(txdb, mapUnused, CDiskTxPos(1,1,1), nBestHeight + 1, nFees, false, false))
     {
         if (pfMissingInputs)
             *pfMissingInputs = true;
         return error("AcceptTransaction() : ConnectInputs failed %s", hash.ToString().substr(0,6).c_str());
+    }
+
+    if (fCheckInputs && nBestHeight + 1 >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+    {
+        double dPriority = ComputePriority(*this, txdb, nBestHeight + 1);
+        bool fAllowFree = (dPriority >= FREE_PRIORITY_THRESHOLD);
+        int64 nMinRelayFee = GetMinFee(1, fAllowFree);
+
+        if (nFees < nMinRelayFee)
+            return error("AcceptTransaction() : not enough fees %s, %" PRI64d " < %" PRI64d,
+                         hash.ToString().substr(0,6).c_str(), nFees, nMinRelayFee);
     }
 
     // Store transaction in memory
@@ -1115,7 +1196,10 @@ bool CTransaction::ConnectInputs(CTxDB& txdb, map<uint256, CTxIndex>& mapTestPoo
                         return error("ConnectInputs() : tried to spend coinbase at depth %d", nBestHeight - pindex->nHeight);
 
             // Verify signature
-            if (!VerifySignature(txPrev, *this, i))
+            unsigned int nScriptFlags = SCRIPT_VERIFY_NONE;
+            if (nHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+                nScriptFlags |= SCRIPT_VERIFY_EXEC;
+            if (!VerifySignature(txPrev, *this, i, 0, nScriptFlags))
                 return error("ConnectInputs() : %s VerifySignature failed", GetHash().ToString().substr(0,6).c_str());
 
             // Check for conflicts
@@ -1180,7 +1264,10 @@ bool CTransaction::ClientConnectInputs()
                 return false;
 
             // Verify signature
-            if (!VerifySignature(txPrev, *this, i))
+            unsigned int nScriptFlags = SCRIPT_VERIFY_NONE;
+            if (nBestHeight + 1 >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+                nScriptFlags |= SCRIPT_VERIFY_EXEC;
+            if (!VerifySignature(txPrev, *this, i, 0, nScriptFlags))
                 return error("ConnectInputs() : VerifySignature failed");
 
             ///// this is redundant with the mapNextTx stuff, not sure which I want to get rid of
@@ -1481,9 +1568,18 @@ bool CBlock::CheckBlock() const
             return error("CheckBlock() : more than one coinbase");
 
     // Check transactions
+    unsigned int nSigOps = 0;
     foreach(const CTransaction& tx, vtx)
+    {
         if (!tx.CheckTransaction())
             return error("CheckBlock() : CheckTransaction failed");
+        foreach(const CTxIn& txin, tx.vin)
+            nSigOps += GetSigOpCount(txin.scriptSig);
+        foreach(const CTxOut& txout, tx.vout)
+            nSigOps += GetSigOpCount(txout.scriptPubKey);
+    }
+    if (nSigOps > MAX_SIGOPS_PER_BLOCK)
+        return error("CheckBlock() : too many sigops");
 
     // Check proof of work matches claimed amount
     if (CBigNum().SetCompact(nBits) > bnProofOfWorkLimit)
@@ -3267,34 +3363,194 @@ void BitcoinMiner()
         {
             CTxDB txdb("r");
             map<uint256, CTxIndex> mapTestPool;
-            vector<char> vfAlreadyAdded(mapTransactions.size());
-            bool fFoundSomething = true;
-            unsigned int nBlockSize = 0;
-            while (fFoundSomething && nBlockSize < MAX_SIZE/2)
+            int nTargetHeight = (pindexPrev ? pindexPrev->nHeight + 1 : 0);
+            bool fUsePriority = (nTargetHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT);
+
+            if (fUsePriority)
             {
-                fFoundSomething = false;
-                unsigned int n = 0;
-                for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin(); mi != mapTransactions.end(); ++mi, ++n)
+                struct CTxCand
                 {
-                    if (vfAlreadyAdded[n])
-                        continue;
+                    uint256 hash;
+                    CTransaction tx;
+                    double dPriority;
+                    double dFeePerByte;
+                    unsigned int nTxSize;
+                    int64 nTxFee;
+                };
+
+                vector<CTxCand> vCand;
+                vCand.reserve(mapTransactions.size());
+
+                for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin(); mi != mapTransactions.end(); ++mi)
+                {
                     CTransaction& tx = (*mi).second;
                     if (tx.IsCoinBase() || !tx.IsFinal())
                         continue;
 
-                    // Transaction fee based on block size
-                    int64 nMinFee = tx.GetMinFee(nBlockSize);
+                    CTxCand c;
+                    c.hash = (*mi).first;
+                    c.tx = tx;
+                    c.nTxSize = ::GetSerializeSize(tx, SER_NETWORK);
+                    c.dPriority = ComputePriority(tx, txdb, nTargetHeight);
+
+                    int64 nValueIn = 0;
+                    bool fOk = true;
+                    for (int i = 0; i < tx.vin.size(); i++)
+                    {
+                        COutPoint prevout = tx.vin[i].prevout;
+                        CTxIndex txindex;
+                        CTransaction txPrev;
+                        bool fFoundIndex = false;
+
+                        if (mapTestPool.count(prevout.hash))
+                        {
+                            txindex = mapTestPool[prevout.hash];
+                            fFoundIndex = true;
+                        }
+                        else
+                        {
+                            fFoundIndex = txdb.ReadTxIndex(prevout.hash, txindex);
+                        }
+
+                        if (fFoundIndex && txindex.pos != CDiskTxPos(1,1,1))
+                        {
+                            if (!txPrev.ReadFromDisk(txindex.pos))
+                            {
+                                fOk = false;
+                                break;
+                            }
+                        }
+                        else if (mapTransactions.count(prevout.hash))
+                        {
+                            txPrev = mapTransactions[prevout.hash];
+                        }
+                        else
+                        {
+                            fOk = false;
+                            break;
+                        }
+
+                        if (prevout.n < txPrev.vout.size())
+                            nValueIn += txPrev.vout[prevout.n].nValue;
+                    }
+                    if (!fOk)
+                        continue;
+
+                    c.nTxFee = nValueIn - tx.GetValueOut();
+                    if (c.nTxFee < 0)
+                        continue;
+                    c.dFeePerByte = (c.nTxSize > 0) ? (double)c.nTxFee / c.nTxSize : 0.0;
+                    vCand.push_back(c);
+                }
+
+                sort(vCand.begin(), vCand.end(),
+                    [](const CTxCand& a, const CTxCand& b) {
+                        return a.dPriority > b.dPriority;
+                    });
+
+                unsigned int nBlockSize = 0;
+                unsigned int nBlockPrioritySize = 0;
+                set<uint256> setAdded;
+
+                for (unsigned int i = 0; i < vCand.size(); i++)
+                {
+                    CTxCand& c = vCand[i];
+                    if (nBlockPrioritySize + c.nTxSize > DEFAULT_BLOCK_PRIORITY_SIZE)
+                        continue;
+                    if (c.dPriority < FREE_PRIORITY_THRESHOLD && c.nTxFee == 0)
+                        continue;
+
+                    bool fHasDust = false;
+                    foreach(const CTxOut& txout, c.tx.vout)
+                        if (txout.nValue < DUST_THRESHOLD)
+                            fHasDust = true;
+                    if (fHasDust && c.nTxFee < CENT)
+                        continue;
+
+                    bool fAllowFree = (c.dPriority >= FREE_PRIORITY_THRESHOLD);
+                    int64 nMinFee = c.tx.GetMinFee(nBlockSize, fAllowFree);
+                    if (c.nTxFee < nMinFee && !fAllowFree)
+                        continue;
 
                     map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
-                    if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), 0, nFees, false, true, nMinFee))
+                    if (!c.tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), nTargetHeight, nFees, false, true, fAllowFree ? 0 : nMinFee))
                         continue;
                     swap(mapTestPool, mapTestPoolTmp);
 
-                    pblock->vtx.push_back(tx);
-                    nBlockSize += ::GetSerializeSize(tx, SER_NETWORK);
-                    vfAlreadyAdded[n] = true;
-                    fFoundSomething = true;
+                    pblock->vtx.push_back(c.tx);
+                    nBlockSize += c.nTxSize;
+                    nBlockPrioritySize += c.nTxSize;
+                    setAdded.insert(c.hash);
                     nTxsAdded++;
+                }
+
+                vector<CTxCand> vFeeSorted;
+                for (unsigned int i = 0; i < vCand.size(); i++)
+                    if (!setAdded.count(vCand[i].hash))
+                        vFeeSorted.push_back(vCand[i]);
+
+                sort(vFeeSorted.begin(), vFeeSorted.end(),
+                    [](const CTxCand& a, const CTxCand& b) {
+                        return a.dFeePerByte > b.dFeePerByte;
+                    });
+
+                for (unsigned int i = 0; i < vFeeSorted.size(); i++)
+                {
+                    CTxCand& c = vFeeSorted[i];
+                    if (nBlockSize + c.nTxSize > MAX_SIZE/2)
+                        break;
+
+                    int64 nMinFee = c.tx.GetMinFee(nBlockSize);
+                    if (c.nTxFee < nMinFee)
+                        continue;
+
+                    bool fHasDust = false;
+                    foreach(const CTxOut& txout, c.tx.vout)
+                        if (txout.nValue < DUST_THRESHOLD)
+                            fHasDust = true;
+                    if (fHasDust && c.nTxFee < CENT)
+                        continue;
+
+                    map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
+                    if (!c.tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), nTargetHeight, nFees, false, true, nMinFee))
+                        continue;
+                    swap(mapTestPool, mapTestPoolTmp);
+
+                    pblock->vtx.push_back(c.tx);
+                    nBlockSize += c.nTxSize;
+                    nTxsAdded++;
+                }
+            }
+            else
+            {
+                vector<char> vfAlreadyAdded(mapTransactions.size());
+                bool fFoundSomething = true;
+                unsigned int nBlockSize = 0;
+                while (fFoundSomething && nBlockSize < MAX_SIZE/2)
+                {
+                    fFoundSomething = false;
+                    unsigned int n = 0;
+                    for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin(); mi != mapTransactions.end(); ++mi, ++n)
+                    {
+                        if (vfAlreadyAdded[n])
+                            continue;
+                        CTransaction& tx = (*mi).second;
+                        if (tx.IsCoinBase() || !tx.IsFinal())
+                            continue;
+
+                        int64 nMinFee = tx.GetMinFee(nBlockSize);
+
+                        map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
+                        if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), nTargetHeight, nFees, false, true, nMinFee))
+                            continue;
+                        swap(mapTestPool, mapTestPoolTmp);
+
+                        pblock->vtx.push_back(tx);
+                        nBlockSize += ::GetSerializeSize(tx, SER_NETWORK);
+                        vfAlreadyAdded[n] = true;
+                        fFoundSomething = true;
+                        nTxsAdded++;
+                    }
                 }
             }
         }
@@ -3525,33 +3781,196 @@ CBlock* CreateNewBlock(CKey& key)
     {
         CTxDB txdb("r");
         map<uint256, CTxIndex> mapTestPool;
-        vector<char> vfAlreadyAdded(mapTransactions.size());
-        bool fFoundSomething = true;
-        unsigned int nBlockSize = 0;
+        int nTargetHeight = (pindexPrev ? pindexPrev->nHeight + 1 : 0);
+        bool fUsePriority = (nTargetHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT);
 
-        while (fFoundSomething && nBlockSize < MAX_SIZE/2)
+        if (fUsePriority)
         {
-            fFoundSomething = false;
-            unsigned int n = 0;
-            for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin(); mi != mapTransactions.end(); ++mi, ++n)
+            struct CTxCandidate
             {
-                if (vfAlreadyAdded[n])
-                    continue;
+                uint256 hash;
+                CTransaction tx;
+                double dPriority;
+                double dFeePerByte;
+                unsigned int nTxSize;
+                int64 nTxFee;
+            };
+
+            vector<CTxCandidate> vCandidates;
+            vCandidates.reserve(mapTransactions.size());
+
+            for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin(); mi != mapTransactions.end(); ++mi)
+            {
                 CTransaction& tx = (*mi).second;
                 if (tx.IsCoinBase() || !tx.IsFinal())
                     continue;
 
-                int64 nMinFee = tx.GetMinFee(nBlockSize);
+                CTxCandidate cand;
+                cand.hash = (*mi).first;
+                cand.tx = tx;
+                cand.nTxSize = ::GetSerializeSize(tx, SER_NETWORK);
+                cand.dPriority = ComputePriority(tx, txdb, nTargetHeight);
+
+                int64 nValueIn = 0;
+                bool fInputsOk = true;
+                for (int i = 0; i < tx.vin.size(); i++)
+                {
+                    COutPoint prevout = tx.vin[i].prevout;
+                    CTxIndex txindex;
+                    CTransaction txPrev;
+                    bool fFoundIndex = false;
+
+                    if (mapTestPool.count(prevout.hash))
+                    {
+                        txindex = mapTestPool[prevout.hash];
+                        fFoundIndex = true;
+                    }
+                    else
+                    {
+                        fFoundIndex = txdb.ReadTxIndex(prevout.hash, txindex);
+                    }
+
+                    if (fFoundIndex && txindex.pos != CDiskTxPos(1,1,1))
+                    {
+                        if (!txPrev.ReadFromDisk(txindex.pos))
+                        {
+                            fInputsOk = false;
+                            break;
+                        }
+                    }
+                    else if (mapTransactions.count(prevout.hash))
+                    {
+                        txPrev = mapTransactions[prevout.hash];
+                    }
+                    else
+                    {
+                        fInputsOk = false;
+                        break;
+                    }
+
+                    if (prevout.n < txPrev.vout.size())
+                        nValueIn += txPrev.vout[prevout.n].nValue;
+                }
+                if (!fInputsOk)
+                    continue;
+
+                cand.nTxFee = nValueIn - tx.GetValueOut();
+                if (cand.nTxFee < 0)
+                    continue;
+                cand.dFeePerByte = (cand.nTxSize > 0) ? (double)cand.nTxFee / cand.nTxSize : 0.0;
+
+                vCandidates.push_back(cand);
+            }
+
+            sort(vCandidates.begin(), vCandidates.end(),
+                [](const CTxCandidate& a, const CTxCandidate& b) {
+                    return a.dPriority > b.dPriority;
+                });
+
+            unsigned int nBlockSize = 0;
+            unsigned int nBlockPrioritySize = 0;
+            set<uint256> setAdded;
+
+            for (unsigned int i = 0; i < vCandidates.size(); i++)
+            {
+                CTxCandidate& cand = vCandidates[i];
+                if (nBlockPrioritySize + cand.nTxSize > DEFAULT_BLOCK_PRIORITY_SIZE)
+                    continue;
+                if (cand.dPriority < FREE_PRIORITY_THRESHOLD && cand.nTxFee == 0)
+                    continue;
+
+                bool fHasDust = false;
+                foreach(const CTxOut& txout, cand.tx.vout)
+                    if (txout.nValue < DUST_THRESHOLD)
+                        fHasDust = true;
+                if (fHasDust && cand.nTxFee < CENT)
+                    continue;
+
+                bool fAllowFree = (cand.dPriority >= FREE_PRIORITY_THRESHOLD);
+                int64 nMinFee = cand.tx.GetMinFee(nBlockSize, fAllowFree);
+                if (cand.nTxFee < nMinFee && !fAllowFree)
+                    continue;
 
                 map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
-                if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), 0, nFees, false, true, nMinFee))
+                if (!cand.tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), nTargetHeight, nFees, false, true, fAllowFree ? 0 : nMinFee))
                     continue;
                 swap(mapTestPool, mapTestPoolTmp);
 
-                pblock->vtx.push_back(tx);
-                nBlockSize += ::GetSerializeSize(tx, SER_NETWORK);
-                vfAlreadyAdded[n] = true;
-                fFoundSomething = true;
+                pblock->vtx.push_back(cand.tx);
+                nBlockSize += cand.nTxSize;
+                nBlockPrioritySize += cand.nTxSize;
+                setAdded.insert(cand.hash);
+            }
+
+            vector<CTxCandidate> vFeeSorted;
+            for (unsigned int i = 0; i < vCandidates.size(); i++)
+            {
+                if (setAdded.count(vCandidates[i].hash))
+                    continue;
+                vFeeSorted.push_back(vCandidates[i]);
+            }
+
+            sort(vFeeSorted.begin(), vFeeSorted.end(),
+                [](const CTxCandidate& a, const CTxCandidate& b) {
+                    return a.dFeePerByte > b.dFeePerByte;
+                });
+
+            for (unsigned int i = 0; i < vFeeSorted.size(); i++)
+            {
+                CTxCandidate& cand = vFeeSorted[i];
+                if (nBlockSize + cand.nTxSize > MAX_SIZE/2)
+                    break;
+
+                int64 nMinFee = cand.tx.GetMinFee(nBlockSize);
+                if (cand.nTxFee < nMinFee)
+                    continue;
+
+                bool fHasDust = false;
+                foreach(const CTxOut& txout, cand.tx.vout)
+                    if (txout.nValue < DUST_THRESHOLD)
+                        fHasDust = true;
+                if (fHasDust && cand.nTxFee < CENT)
+                    continue;
+
+                map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
+                if (!cand.tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), nTargetHeight, nFees, false, true, nMinFee))
+                    continue;
+                swap(mapTestPool, mapTestPoolTmp);
+
+                pblock->vtx.push_back(cand.tx);
+                nBlockSize += cand.nTxSize;
+            }
+        }
+        else
+        {
+            vector<char> vfAlreadyAdded(mapTransactions.size());
+            bool fFoundSomething = true;
+            unsigned int nBlockSize = 0;
+
+            while (fFoundSomething && nBlockSize < MAX_SIZE/2)
+            {
+                fFoundSomething = false;
+                unsigned int n = 0;
+                for (map<uint256, CTransaction>::iterator mi = mapTransactions.begin(); mi != mapTransactions.end(); ++mi, ++n)
+                {
+                    if (vfAlreadyAdded[n])
+                        continue;
+                    CTransaction& tx = (*mi).second;
+                    if (tx.IsCoinBase() || !tx.IsFinal())
+                        continue;
+
+                    int64 nMinFee = tx.GetMinFee(nBlockSize);
+
+                    map<uint256, CTxIndex> mapTestPoolTmp(mapTestPool);
+                    if (!tx.ConnectInputs(txdb, mapTestPoolTmp, CDiskTxPos(1,1,1), nTargetHeight, nFees, false, true, nMinFee))
+                        continue;
+                    swap(mapTestPool, mapTestPoolTmp);
+
+                    pblock->vtx.push_back(tx);
+                    nBlockSize += ::GetSerializeSize(tx, SER_NETWORK);
+                    vfAlreadyAdded[n] = true;
+                    fFoundSomething = true;
+                }
             }
         }
     }
@@ -3838,9 +4257,15 @@ bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CK
                             SignSignature(*pcoin, wtxNew, nIn++);
 
                 // Check that enough fee is included
-                if (nFee < wtxNew.GetMinFee())
+                bool fAllowFree = false;
+                if (nBestHeight + 1 >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
                 {
-                    nFee = nFeeRequiredRet = wtxNew.GetMinFee();
+                    double dPriority = ComputePriority(wtxNew, txdb, nBestHeight + 1);
+                    fAllowFree = (dPriority >= FREE_PRIORITY_THRESHOLD);
+                }
+                if (nFee < wtxNew.GetMinFee(1, fAllowFree))
+                {
+                    nFee = nFeeRequiredRet = wtxNew.GetMinFee(1, fAllowFree);
                     continue;
                 }
 

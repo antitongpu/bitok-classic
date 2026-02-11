@@ -42,17 +42,6 @@ In the GUI: Settings > Options > Generate Coins
 
 Same economics as Bitcoin. Different mining algorithm. Different genesis.
 
-## Genesis Block
-
-```
-Hash:    0x0290400ea28d3fe79d102ca6b7cd11cee5eba9f17f2046c303d92f65d6ed2617
-Message: "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks"
-nBits:   0x1effffff
-nNonce:  37137
-```
-
-The message is the same as Bitcoin's. Seemed appropriate.
-
 ## What Changed From Original Bitcoin
 
 **Three things:**
@@ -191,7 +180,7 @@ This is software. It runs. Run it or don't.
 
 ## Security
 
-This is 2010 code adapted for 2024. The cryptography is fine (ECDSA, SHA-256 for non-mining hashes). The networking and RPC are... from 2010.
+This is 2010 code adapted for 2026. The cryptography is fine (ECDSA, SHA-256 for non-mining hashes). The networking and RPC are... from 2010.
 
 Don't put your life savings in this. Don't run it on a machine you care about without understanding what you're doing. Don't blame me if something goes wrong.
 
@@ -204,8 +193,13 @@ All the security fixes from Satoshi's final release are included:
 ## Documentation
 
 ### General
-- [MANIFESTO.md](MANIFESTO.md) - Why this exists
-- [CHANGELOG.md](CHANGELOG.md) - Version history
+- [BITOK_DEVELOPMENT.md](BITOK_DEVELOPMENT.md) - Design choices and development notes
+- [GENESIS.md](GENESIS.md) - Genesis block details and historical notes
+
+### Protocol & Security
+- [SCRIPT_EXEC.md](SCRIPT_EXEC.md) - Script exec consensus-level
+- [SECURITY_FIXES.md](SECURITY_FIXES.md) - Security hardening and network improvements
+- [SPV_CLIENT.md](SPV_CLIENT.md) - SPV lightweight client technical specification
 
 ### Mining
 - [BITOKPOW.md](BITOKPOW.md) - Yespower proof-of-work details

@@ -203,8 +203,8 @@ bool ThreadSafeAskFee(int64 nFeeRequired, const string& strCaption, wxWindow* pa
     if (nFeeRequired == 0 || fDaemon)
         return true;
     string strMessage = strprintf(
-        _("This transaction is over the size limit.  You can still send it for a fee of %s, "
-          "which goes to the nodes that process your transaction and helps to support the network.  "
+        _("This transaction requires a fee of %s.  "
+          "The fee helps support the network and prevents spam.  "
           "Do you want to pay the fee?"),
         FormatMoney(nFeeRequired).c_str());
     return (ThreadSafeMessageBox(strMessage, strCaption, wxYES_NO, parent) == wxYES);

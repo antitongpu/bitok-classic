@@ -159,11 +159,14 @@ BITOK includes standard templates and wallet support for multi-signature transac
 
 ## Notes on Cryptography and Complexity
 
-The original system uses ECDSA over secp256k1.
-This is preserved.
+The original system uses ECDSA over secp256k1 for transaction signatures.
+This is preserved. No additional signature schemes, script versions, or transaction encodings are introduced.
 
-No additional signature schemes, script versions, or transaction encodings are introduced.
-Simplicity and auditability are preferred over adding new cryptographic assumptions.
+The Proof-of-Work algorithm has been changed from SHA256d to Yespower v1.0,
+a memory-hard function designed to resist ASIC and GPU advantage.
+This is the one new cryptographic assumption introduced by the project.
+
+Simplicity and auditability are preferred over unnecessary complexity.
 
 ---
 

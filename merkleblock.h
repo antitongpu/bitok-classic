@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Bitok developers
+// Copyright (c) 2026 Bitok developers
 // Distributed under the MIT/X11 software license, see the accompanying
 // file license.txt or http://www.opensource.org/licenses/mit-license.php.
 

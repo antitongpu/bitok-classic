@@ -98,6 +98,8 @@ public:
 
     bool SetPrivKey(const CPrivKey& vchPrivKey)
     {
+        if (vchPrivKey.empty())
+            return false;
         const unsigned char* pbegin = &vchPrivKey[0];
         if (!d2i_ECPrivateKey(&pkey, &pbegin, vchPrivKey.size()))
             return false;
@@ -159,6 +161,8 @@ public:
 
     bool SetPubKey(const vector<unsigned char>& vchPubKey)
     {
+        if (vchPubKey.empty())
+            return false;
         const unsigned char* pbegin = &vchPubKey[0];
         if (!o2i_ECPublicKey(&pkey, &pbegin, vchPubKey.size()))
             return false;
@@ -181,18 +185,41 @@ public:
     bool Sign(uint256 hash, vector<unsigned char>& vchSig)
     {
         vchSig.clear();
-        unsigned char pchSig[10000];
-        unsigned int nSize = 0;
-        if (!ECDSA_sign(0, (unsigned char*)&hash, sizeof(hash), pchSig, &nSize, pkey))
+        ECDSA_SIG* sig = ECDSA_do_sign((unsigned char*)&hash, sizeof(hash), pkey);
+        if (sig == NULL)
             return false;
+
+        const BIGNUM *r, *s;
+        ECDSA_SIG_get0(sig, &r, &s);
+
+        const EC_GROUP* group = EC_KEY_get0_group(pkey);
+        BIGNUM* order = BN_new();
+        BIGNUM* halforder = BN_new();
+        EC_GROUP_get_order(group, order, NULL);
+        BN_rshift1(halforder, order);
+
+        if (BN_cmp(s, halforder) > 0)
+        {
+            BIGNUM* s_new = BN_new();
+            BN_sub(s_new, order, s);
+            ECDSA_SIG_set0(sig, BN_dup(r), s_new);
+        }
+
+        BN_free(order);
+        BN_free(halforder);
+
+        unsigned int nSize = i2d_ECDSA_SIG(sig, NULL);
         vchSig.resize(nSize);
-        memcpy(&vchSig[0], pchSig, nSize);
+        unsigned char* pos = &vchSig[0];
+        i2d_ECDSA_SIG(sig, &pos);
+        ECDSA_SIG_free(sig);
         return true;
     }
 
     bool Verify(uint256 hash, const vector<unsigned char>& vchSig)
     {
-        // -1 = error, 0 = bad sig, 1 = good
+        if (vchSig.empty())
+            return false;
         if (ECDSA_verify(0, (unsigned char*)&hash, sizeof(hash), &vchSig[0], vchSig.size(), pkey) != 1)
             return false;
         return true;
