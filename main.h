@@ -33,6 +33,10 @@ inline bool MoneyRange(int64 nValue) { return (nValue >= 0 && nValue <= MAX_MONE
 static const int TIMEWARP_ACTIVATION_HEIGHT = 16000;
 static const int SCRIPT_EXEC_ACTIVATION_HEIGHT = 18000;
 
+static const unsigned int DEFAULT_BLOCK_PRIORITY_SIZE = 27000;
+static const int64 FREE_PRIORITY_THRESHOLD = 57600000;  // COIN * 144 / 250  (1 BTC confirmed 1 day in a 250-byte tx)
+static const int64 DUST_THRESHOLD = CENT;
+
 static const CBigNum bnProofOfWorkLimit(~uint256(0) >> 17);
 
 
@@ -96,6 +100,7 @@ void BitcoinMiner();
 CBlock* CreateNewBlock(CKey& key);
 int64 GetNetworkHashPS(int lookup = 30);
 bool ProcessBlock(CNode* pfrom, CBlock* pblock);
+double ComputePriority(const CTransaction& tx, CTxDB& txdb, int nHeight);
 
 
 
@@ -546,22 +551,32 @@ public:
         return nValueOut;
     }
 
-    int64 GetMinFee(unsigned int nBlockSize=1) const
+    int64 GetMinFee(unsigned int nBlockSize=1, bool fAllowFree=false) const
     {
-        // Base fee is 1 cent per kilobyte
         unsigned int nBytes = ::GetSerializeSize(*this, SER_NETWORK);
+
+        if (nBestHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+        {
+            if (fAllowFree && nBytes < 1000)
+                return 0;
+
+            int64 nMinFee = (1 + (int64)nBytes / 1000) * CENT;
+
+            foreach(const CTxOut& txout, vout)
+                if (txout.nValue < DUST_THRESHOLD)
+                    return max(nMinFee, CENT);
+
+            return nMinFee;
+        }
+
         int64 nMinFee = (1 + (int64)nBytes / 1000) * CENT;
 
-        // Transactions under 60K are free as long as block size is under 80K
-        // (about 27,000bc if made of 50bc inputs)
         if (nBytes < 60000 && nBlockSize < 80000)
             nMinFee = 0;
 
-        // Transactions under 3K are free as long as block size is under 200K
         if (nBytes < 3000 && nBlockSize < 200000)
             nMinFee = 0;
 
-        // To limit dust spam, require a 0.01 fee if any output is less than 0.01
         if (nMinFee < CENT)
             foreach(const CTxOut& txout, vout)
                 if (txout.nValue < CENT)

@@ -498,26 +498,53 @@ Value getblocktemplate(const Array& params, bool fHelp)
     result.push_back(Pair("previousblockhash", pblock->hashPrevBlock.GetHex()));
 
     Array transactions;
-    for (unsigned int i = 1; i < pblock->vtx.size(); i++)
     {
-        const CTransaction& tx = pblock->vtx[i];
-        CDataStream ssTx(SER_NETWORK);
-        ssTx << tx;
+        CTxDB txdb("r");
+        int nTargetHeight = nBestHeight + 1;
+        for (unsigned int i = 1; i < pblock->vtx.size(); i++)
+        {
+            const CTransaction& tx = pblock->vtx[i];
+            CDataStream ssTx(SER_NETWORK);
+            ssTx << tx;
 
-        Object entry;
-        entry.push_back(Pair("data", HexStr(ssTx.begin(), ssTx.end(), false)));
-        entry.push_back(Pair("txid", tx.GetHash().GetHex()));
-        entry.push_back(Pair("hash", tx.GetHash().GetHex()));
-        unsigned int nTxSigOps = 0;
-        foreach(const CTxIn& txin, tx.vin)
-            nTxSigOps += GetSigOpCount(txin.scriptSig);
-        foreach(const CTxOut& txout, tx.vout)
-            nTxSigOps += GetSigOpCount(txout.scriptPubKey);
+            Object entry;
+            entry.push_back(Pair("data", HexStr(ssTx.begin(), ssTx.end(), false)));
+            entry.push_back(Pair("txid", tx.GetHash().GetHex()));
+            entry.push_back(Pair("hash", tx.GetHash().GetHex()));
+            unsigned int nTxSigOps = 0;
+            foreach(const CTxIn& txin, tx.vin)
+                nTxSigOps += GetSigOpCount(txin.scriptSig);
+            foreach(const CTxOut& txout, tx.vout)
+                nTxSigOps += GetSigOpCount(txout.scriptPubKey);
 
-        entry.push_back(Pair("depends", Array()));
-        entry.push_back(Pair("fee", (int64_t)0));
-        entry.push_back(Pair("sigops", (int64_t)nTxSigOps));
-        transactions.push_back(entry);
+            int64 nTxFee = 0;
+            int64 nValueIn = 0;
+            for (int j = 0; j < tx.vin.size(); j++)
+            {
+                COutPoint prevout = tx.vin[j].prevout;
+                CTxIndex txindex;
+                CTransaction txPrev;
+                if (txdb.ReadTxIndex(prevout.hash, txindex) && txPrev.ReadFromDisk(txindex.pos))
+                {
+                    if (prevout.n < txPrev.vout.size())
+                        nValueIn += txPrev.vout[prevout.n].nValue;
+                }
+            }
+            nTxFee = nValueIn - tx.GetValueOut();
+            if (nTxFee < 0)
+                nTxFee = 0;
+
+            double dPriority = ComputePriority(tx, txdb, nTargetHeight);
+
+            entry.push_back(Pair("depends", Array()));
+            entry.push_back(Pair("fee", (int64_t)nTxFee));
+            entry.push_back(Pair("sigops", (int64_t)nTxSigOps));
+
+            if (nTargetHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+                entry.push_back(Pair("priority", dPriority));
+
+            transactions.push_back(entry);
+        }
     }
     result.push_back(Pair("transactions", transactions));
 
