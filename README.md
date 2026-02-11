@@ -1,237 +1,246 @@
 # Bitok
 
-It's Bitcoin, but not Bitcoin. It's new, but also old. And yes, you can actually mine it with your laptop.
+Bitok runs Bitcoin v0.3.19 under its original assumptions and completes design elements present in the early codebase that were never fully finished.
 
-## What Is This
-
-I took the last version of Bitcoin that Satoshi worked on (0.3.19 from December 2010), updated it to compile on modern systems, and replaced SHA-256 mining with Yespower so GPUs don't have a massive advantage.
-
-New genesis block. Separate network. Same rules otherwise.
-
-## Why
-
-In 2010, Satoshi wrote:
-
-> It's nice how anyone with just a CPU can compete fairly equally right now.
-
-That stopped being true about a year later. Now it's true again, at least for this chain.
-
-## Quick Start
-
-```bash
-# Download and run (Linux)
-./bitokd                    # start a node
-./bitokd -gen               # start mining
-./bitokd getinfo            # check status
-```
-
-Mining uses all CPU cores by default. Limit it with `-genproclimit=4` or whatever.
-
-In the GUI: Settings > Options > Generate Coins
-
-## Specifications
-
-| Parameter | Value |
-|-----------|-------|
-| Algorithm | Yespower 1.0 (CPU-friendly, memory-hard) |
-| Block time | 10 minutes |
-| Block reward | 50 BITOK, halving every 210,000 blocks |
-| Max supply | 21,000,000 |
-| P2P port | 18333 |
-| RPC port | 8332 |
-
-Same economics as Bitcoin. Different mining algorithm. Different genesis.
-
-## What Changed From Original Bitcoin
-
-**Three things:**
-
-1. Build system updated for OpenSSL 3.x, Boost 1.74+, wxWidgets 3.2, etc. Modern Ubuntu compiles it now.
-
-2. SHA-256 replaced with Yespower for proof-of-work. Your laptop can find blocks. A GPU won't help much.
-
-3. New genesis block. Separate network.
-
-**Everything else is identical to v0.3.19:**
-
-- Same transaction format
-- Same script system
-- Same wallet behavior
-- Same networking code
-- Same 21M cap, same halving schedule
-- All security fixes from the Satoshi era included
-
-No SegWit. No new opcodes. No BIPs. No layer 2. The protocol is frozen at December 2010.
-
-## Building
-
-### Ubuntu 24.04
-
-```bash
-sudo apt-get install build-essential libssl-dev libdb5.3-dev libboost-all-dev
-
-# Daemon only
-make -f makefile.unix
-
-# With GUI
-sudo apt-get install libwxgtk3.2-dev libgtk-3-dev
-make -f makefile.unix gui
-```
-
-### Other Platforms
-
-- [BUILD_UNIX.md](BUILD_UNIX.md) - Linux/BSD build instructions
-- [BUILD_MACOS.md](BUILD_MACOS.md) - macOS build instructions
-- [BUILD_WINDOWS_MINGW.md](BUILD_WINDOWS_MINGW.md) - Windows MinGW/MSYS2 build
-- [BUILD_WINDOWS_VC.md](BUILD_WINDOWS_VC.md) - Windows Visual Studio build
-
-## Running
-
-**Daemon:**
-```bash
-./bitokd                          # run node
-./bitokd -gen                     # run node + mine
-./bitokd -daemon                  # background mode
-./bitokd stop                     # stop daemon
-```
-
-**Configuration:** Settings can be passed via command line or config file.
-
-Config file location:
-| OS | Path |
-|----|------|
-| Linux (daemon) | `~/.bitokd/bitok.conf` |
-| macOS | `~/Library/Application Support/Bitok/bitok.conf` |
-| Windows | `%APPDATA%\Bitok\bitok.conf` |
-
-Example config file:
-```ini
-server=1
-rpcuser=user
-rpcpassword=pass
-gen=1
-addnode=1.2.3.4
-```
-
-Then run:
-```bash
-./bitokd -daemon
-```
-
-**RPC:**
-```bash
-./bitokd getinfo                  # node status
-./bitokd getbalance               # wallet balance
-./bitokd getnewaddress            # new receiving address
-./bitokd sendtoaddress <addr> <amount>
-./bitokd help                     # list all commands
-```
-
-See [RPC_API.md](RPC_API.md) for the full API.
-
-**GUI:**
-```bash
-./bitok
-```
-
-Point and click. Mining checkbox in options.
-
-## Mining
-
-```bash
-./bitokd -gen                     # all cores
-./bitokd -gen -genproclimit=4     # 4 cores
-```
-
-The algorithm uses ~128KB of memory per hash. This is intentional. It's what makes GPUs inefficient.
-
-Your CPU will automatically use SSE2/AVX/AVX2 if available. No configuration needed.
-
-See [BITOKPOW.md](BITOKPOW.md) for technical details on Yespower.
-
-## Data Directory
-
-| OS | Path |
-|----|------|
-| Linux | `~/.bitokd/` |
-| macOS | `~/Library/Application Support/Bitok/` |
-| Windows | `%APPDATA%\Bitok\` |
-
-Back up `wallet.dat`. If you lose it, coins are gone. There's no recovery. That's not a bug, that's how Bitcoin works.
-
-## Peer Discovery
-
-Uses IRC bootstrap, same as original Bitcoin. Connects to `irc.libera.chat` and finds other nodes in #bitok.
-
-If IRC is down, you can manually add peers:
-```bash
-./bitokd -addnode=<ip>
-```
-
-## What This Is Not
-
-- Not trying to replace Bitcoin
-- Not a fork of BTC (different genesis entirely)
-- Not promising you'll get rich
-- Not going to add features or "improve" the protocol
-- Not going to have a foundation, governance, or roadmap
-
-This is software. It runs. Run it or don't.
-
-## Security
-
-This is 2010 code adapted for 2026. The cryptography is fine (ECDSA, SHA-256 for non-mining hashes). The networking and RPC are... from 2010.
-
-Don't put your life savings in this. Don't run it on a machine you care about without understanding what you're doing. Don't blame me if something goes wrong.
-
-All the security fixes from Satoshi's final release are included:
-- Value overflow protection (184B coin bug)
-- Blockchain checkpoints
-- DoS limits
-- IsStandard() filtering
-
-## Documentation
-
-### General
-- [BITOK_DEVELOPMENT.md](BITOK_DEVELOPMENT.md) - Design choices and development notes
-- [GENESIS.md](GENESIS.md) - Genesis block details and historical notes
-
-### Protocol & Security
-- [SCRIPT_EXEC.md](SCRIPT_EXEC.md) - Script exec consensus-level
-- [SECURITY_FIXES.md](SECURITY_FIXES.md) - Security hardening and network improvements
-- [SPV_CLIENT.md](SPV_CLIENT.md) - SPV lightweight client technical specification
-
-### Mining
-- [BITOKPOW.md](BITOKPOW.md) - Yespower proof-of-work details
-- [SOLO_MINING.md](SOLO_MINING.md) - Solo mining guide with cpuminer
-- [POOL_INTEGRATION.md](POOL_INTEGRATION.md) - Mining pool integration guide
-- [MINING_OPTIMIZATIONS.md](MINING_OPTIMIZATIONS.md) - Performance tuning
-
-### API & Integration
-- [RPC_API.md](RPC_API.md) - Complete JSON-RPC API reference
-- [RPC_MINING_IMPLEMENTATION.md](RPC_MINING_IMPLEMENTATION.md) - Mining RPC implementation details
-
-### Building
-- [BUILD_UNIX.md](BUILD_UNIX.md) - Linux/BSD build instructions
-- [BUILD_MACOS.md](BUILD_MACOS.md) - macOS build instructions
-- [BUILD_WINDOWS.md](BUILD_WINDOWS.md) - Windows build overview
-- [BUILD_WINDOWS_MINGW.md](BUILD_WINDOWS_MINGW.md) - Windows MinGW/MSYS2 build
-- [BUILD_WINDOWS_VC.md](BUILD_WINDOWS_VC.md) - Windows Visual Studio build
-
-## License
-
-MIT, same as original Bitcoin. See [license.txt](license.txt).
-
-## Author
-
-Tom Elvis Jedusor
-
-(It's an anagram. Don't worry about it.)
+It is not a fork of modern Bitcoin Core.  
+It is a continuation of the last release developed with Satoshi’s direct participation, updated to operate safely on a modern network.
 
 ---
 
-> Writing a description for this thing is bloody hard. There's nothing to quite relate it to.
+## Project Direction
 
-*- Satoshi Nakamoto, January 2009*
+Bitcoin v0.3.19 contained a full script engine, a priority-based fee model, early SPV infrastructure, payment channel primitives, and publish/subscribe networking code.  
+Over time, many of these capabilities were disabled, removed, or redefined.
 
-Still true.
+Bitok’s approach is simple:
+
+- Preserve the economic model (21M supply, 10-minute blocks, halving schedule)
+- Preserve the original scripting surface
+- Preserve zero-confirmation and priority semantics
+- Bound and secure the system rather than remove functionality
+
+Where risks existed (unbounded script execution, malleability vectors, consensus inconsistencies), Bitok adds deterministic limits and security fixes — without neutering the original design.
+
+---
+
+# Core Features
+
+## Script Engine (SCRIPT_EXEC)
+
+All original Satoshi-era opcodes remain operational, including:
+
+- OP_CAT
+- OP_MUL / OP_DIV / OP_MOD
+- OP_LSHIFT / OP_RSHIFT
+- OP_AND / OP_OR / OP_XOR / OP_INVERT
+- OP_SUBSTR / OP_LEFT / OP_RIGHT
+- OP_CHECKMULTISIG
+
+The virtual machine is now bounded and hardened.
+
+### Execution Limits
+
+| Limit | Value |
+|-------|-------|
+| Max script size | 10,000 bytes |
+| Max stack depth | 1,000 |
+| Max element size | 520 bytes |
+| Max opcodes per script | 201 |
+| Max sigops per block | 20,000 |
+| Max multisig keys | 20 |
+
+### Security Hardening
+
+- Strict DER signature enforcement
+- Low-S normalization
+- Minimal push encoding
+- Separated evaluation (scriptSig cannot affect scriptPubKey execution)
+- CHECKMULTISIG NULLDUMMY enforcement
+- SIGHASH_SINGLE out-of-range fix
+- OP_RETURN provably unspendable fix
+- OP_VER / OP_VERIF / OP_VERNOTIF disabled (consensus safety)
+
+Full specification:  
+[SCRIPT_EXEC.md](SCRIPT_EXEC.md)
+
+---
+
+## Priority-Based Fee Model
+
+Restores Satoshi’s original transaction priority system:
+
+```
+priority = sum(input_value * confirmations) / tx_size
+```
+
+- First 27KB of each block reserved for high-priority transactions
+- Remaining block space sorted by fee-per-byte
+- Dust (< 0.01 BITOK) requires fee
+- Fee rate: 0.01 BITOK/KB when applicable
+
+Fee rules are policy, not consensus.  
+See: [FEES.md](FEES.md)
+
+---
+
+## SPV Support (Section 8 Whitepaper)
+
+Full node-side support for lightweight clients:
+
+- getheaders / headers
+- Bloom filters (filterload, filteradd, filterclear)
+- Filtered blocks (merkleblock)
+- MSG_FILTERED_BLOCK inventory type
+- gettxoutproof / verifytxoutproof RPC
+- sendrawtransaction RPC
+- getblockheader RPC
+
+Specification:  
+[SPV_CLIENT.md](SPV_CLIENT.md)
+
+---
+
+## Mining
+
+### Proof of Work
+
+- Algorithm: Yespower 1.0
+- Memory-hard, CPU-oriented
+- ~128KB per hash
+- SSE2 / AVX / AVX2 auto-detected
+
+See: [BITOKPOW.md](BITOKPOW.md)
+
+### Mining RPC API
+
+- getblocktemplate (BIP 22 compliant)
+- getwork (legacy support)
+- Full mining pool integration support
+
+See:
+- [POOL_INTEGRATION.md](POOL_INTEGRATION.md)
+- [RPC_MINING_IMPLEMENTATION.md](RPC_MINING_IMPLEMENTATION.md)
+
+---
+
+## Network & Security Enhancements
+
+Bitok integrates critical security and reliability improvements while preserving original protocol semantics.
+
+### Consensus & Chain Safety
+
+- Value overflow protection (184B bug mitigation)
+- Time Warp attack protection
+- Blockchain checkpoints
+- Deterministic script limits
+- Consensus malleability fixes
+
+See: [SECURITY_FIXES.md](SECURITY_FIXES.md)
+
+### Network Improvements
+
+- DNS seed peer discovery
+- IRC bootstrap support
+- Privacy-preserving IP detection
+- Network group diversity enforcement
+- Connection limiting and DoS protections
+
+---
+
+## Key Management
+
+RPC:
+
+```
+dumpprivkey <address>
+importprivkey <wif> [label] [rescan]
+rescanwallet
+```
+
+GUI:
+
+- Private key export from address book
+- Private key import with progress-tracked rescan
+- Wallet.dat fully compatible
+- No wallet migration required
+
+---
+
+# Specifications
+
+| Parameter | Value |
+|-----------|-------|
+| Block time | 10 minutes |
+| Block reward | 50 BITOK |
+| Halving interval | 210,000 blocks |
+| Max supply | 21,000,000 |
+| Coinbase maturity | 100 blocks |
+| P2P port | 18333 |
+| RPC port | 8332 |
+
+New genesis block. Separate network.
+
+---
+
+# Building
+
+See platform-specific guides:
+
+- [BUILD_UNIX.md](BUILD_UNIX.md)
+- [BUILD_MACOS.md](BUILD_MACOS.md)
+- [BUILD_WINDOWS_MINGW.md](BUILD_WINDOWS_MINGW.md)
+- [BUILD_WINDOWS_VC.md](BUILD_WINDOWS_VC.md)
+
+---
+
+# Running
+
+Daemon:
+
+```
+./bitokd
+./bitokd -gen
+./bitokd -daemon
+./bitokd stop
+```
+
+GUI:
+
+```
+./bitok
+```
+
+RPC reference:  
+[RPC_API.md](RPC_API.md)
+
+---
+
+# Documentation Index
+
+### Protocol
+- [SCRIPT_EXEC.md](SCRIPT_EXEC.md)
+- [SPV_CLIENT.md](SPV_CLIENT.md)
+- [FEES.md](FEES.md)
+- [SECURITY_FIXES.md](SECURITY_FIXES.md)
+
+### Mining
+- [BITOKPOW.md](BITOKPOW.md)
+- [SOLO_MINING.md](SOLO_MINING.md)
+- [POOL_INTEGRATION.md](POOL_INTEGRATION.md)
+- [MINING_OPTIMIZATIONS.md](MINING_OPTIMIZATIONS.md)
+
+### Development
+- [BITOK_DEVELOPMENT.md](BITOK_DEVELOPMENT.md)
+- [GENESIS.md](GENESIS.md)
+- [CHANGELOG.md](CHANGELOG.md)
+
+---
+
+# License
+
+MIT License (same as original Bitcoin).  
+See: license.txt
+
+---
+
+Author: Tom Elvis Jedusor
