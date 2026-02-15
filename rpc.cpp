@@ -286,7 +286,7 @@ Value gettransaction(const Array& params, bool fHelp)
             Object entry;
             if (txin.prevout.IsNull())
             {
-                entry.push_back(Pair("coinbase", HexStr(txin.scriptSig.begin(), txin.scriptSig.end())));
+                entry.push_back(Pair("coinbase", HexStr(txin.scriptSig.begin(), txin.scriptSig.end(), false)));
             }
             else
             {
@@ -1205,13 +1205,13 @@ Value getrawtransaction(const Array& params, bool fHelp)
         Object entry;
         if (txin.prevout.IsNull())
         {
-            entry.push_back(Pair("coinbase", HexStr(txin.scriptSig.begin(), txin.scriptSig.end())));
+            entry.push_back(Pair("coinbase", HexStr(txin.scriptSig.begin(), txin.scriptSig.end(), false)));
         }
         else
         {
             entry.push_back(Pair("txid", txin.prevout.hash.ToString()));
             entry.push_back(Pair("vout", (int)txin.prevout.n));
-            entry.push_back(Pair("scriptSig", HexStr(txin.scriptSig.begin(), txin.scriptSig.end())));
+            entry.push_back(Pair("scriptSig", HexStr(txin.scriptSig.begin(), txin.scriptSig.end(), false)));
         }
         entry.push_back(Pair("sequence", (boost::int64_t)txin.nSequence));
         vin.push_back(entry);
