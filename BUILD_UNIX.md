@@ -14,7 +14,7 @@ This product includes software developed by the OpenSSL Project for use in the O
 
 Bitok is Bitcoin v0.3.19 (Satoshi's final release, December 2010) adapted to run on modern systems with **GPU-resistant proof-of-work**.
 
-Bitcoin v0.3.19 includes all critical security fixes from the Satoshi era (value overflow protection, checkpoints, DoS limits, IsStandard filter).
+Bitcoin v0.3.19 includes all critical security fixes from the Satoshi era (value overflow protection, checkpoints, DoS limits) plus modern network hardening (time warp protection, DNS seeds, anchor connections, network group diversity).
 
 **Key changes from original Bitcoin:**
 - ✅ Modern system compatibility (Ubuntu 24.04, OpenSSL 3.x, etc.)
@@ -23,7 +23,7 @@ Bitcoin v0.3.19 includes all critical security fixes from the Satoshi era (value
 - ✅ All Satoshi-era security fixes included from launch
 
 For mining details, see [BITOKPOW.md](BITOKPOW.md).
-For philosophy, see [MANIFESTO.md](MANIFESTO.md).
+
 
 ---
 

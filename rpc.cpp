@@ -1797,6 +1797,503 @@ Value rescanwallet(const Array& params, bool fHelp)
 }
 
 
+static string ClassifyScript(const CScript& scriptPubKey, int& nRequiredRet, Array& addressesRet)
+{
+    nRequiredRet = 0;
+    addressesRet = Array();
+
+    uint160 hash160;
+    if (ExtractHash160(scriptPubKey, hash160))
+    {
+        nRequiredRet = 1;
+        addressesRet.push_back(Hash160ToAddress(hash160));
+        return "pubkeyhash";
+    }
+
+    if (scriptPubKey.size() == 35 && scriptPubKey[0] == 33 && scriptPubKey[34] == OP_CHECKSIG)
+    {
+        vector<unsigned char> vchPubKey(scriptPubKey.begin() + 1, scriptPubKey.begin() + 34);
+        nRequiredRet = 1;
+        addressesRet.push_back(Hash160ToAddress(Hash160(vchPubKey)));
+        return "pubkey";
+    }
+
+    if (scriptPubKey.size() == 67 && scriptPubKey[0] == 65 && scriptPubKey[66] == OP_CHECKSIG)
+    {
+        vector<unsigned char> vchPubKey(scriptPubKey.begin() + 1, scriptPubKey.begin() + 66);
+        nRequiredRet = 1;
+        addressesRet.push_back(Hash160ToAddress(Hash160(vchPubKey)));
+        return "pubkey";
+    }
+
+    do {
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        vector<unsigned char> vchData;
+
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode < OP_1 || opcode > OP_16)
+            break;
+        int nRequired = (int)opcode - (int)(OP_1 - 1);
+
+        vector<vector<unsigned char> > vPubKeys;
+        while (scriptPubKey.GetOp(pc, opcode, vchData))
+        {
+            if (opcode >= OP_1 && opcode <= OP_16)
+            {
+                int nKeys = (int)opcode - (int)(OP_1 - 1);
+                opcodetype opcodeCheck;
+                if (scriptPubKey.GetOp(pc, opcodeCheck) &&
+                    opcodeCheck == OP_CHECKMULTISIG &&
+                    pc == scriptPubKey.end())
+                {
+                    if ((int)vPubKeys.size() == nKeys && nRequired <= nKeys)
+                    {
+                        nRequiredRet = nRequired;
+                        for (int i = 0; i < (int)vPubKeys.size(); i++)
+                            addressesRet.push_back(Hash160ToAddress(Hash160(vPubKeys[i])));
+                        return "multisig";
+                    }
+                }
+                break;
+            }
+            if (vchData.size() == 33 || vchData.size() == 65)
+                vPubKeys.push_back(vchData);
+            else
+                break;
+        }
+    } while (false);
+
+    if (scriptPubKey.size() > 0 && scriptPubKey[0] == OP_RETURN)
+        return "nulldata";
+
+    return "nonstandard";
+}
+
+static Object ScriptPubKeyToJSON(const CScript& scriptPubKey)
+{
+    Object o;
+    o.push_back(Pair("asm", scriptPubKey.ToString()));
+    o.push_back(Pair("hex", HexStr(scriptPubKey.begin(), scriptPubKey.end(), false)));
+
+    int nRequired;
+    Array addresses;
+    string strType = ClassifyScript(scriptPubKey, nRequired, addresses);
+    o.push_back(Pair("type", strType));
+    if (nRequired > 0)
+        o.push_back(Pair("reqSigs", nRequired));
+    if (addresses.size() > 0)
+        o.push_back(Pair("addresses", addresses));
+
+    return o;
+}
+
+
+Value decoderawtransaction(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "decoderawtransaction <hex string>\n"
+            "Return a JSON object representing the serialized, hex-encoded transaction.");
+
+    vector<unsigned char> txData = ParseHex(params[0].get_str());
+    CDataStream ssData(txData, SER_NETWORK);
+    CTransaction tx;
+    try {
+        ssData >> tx;
+    } catch (std::exception &e) {
+        throw runtime_error("TX decode failed");
+    }
+
+    Object result;
+    result.push_back(Pair("txid", tx.GetHash().ToString()));
+    result.push_back(Pair("version", tx.nVersion));
+    result.push_back(Pair("locktime", (boost::int64_t)tx.nLockTime));
+
+    Array vin;
+    foreach(const CTxIn& txin, tx.vin)
+    {
+        Object in;
+        if (txin.prevout.IsNull())
+        {
+            in.push_back(Pair("coinbase", HexStr(txin.scriptSig.begin(), txin.scriptSig.end(), false)));
+        }
+        else
+        {
+            in.push_back(Pair("txid", txin.prevout.hash.ToString()));
+            in.push_back(Pair("vout", (int)txin.prevout.n));
+            Object scriptSigObj;
+            scriptSigObj.push_back(Pair("asm", txin.scriptSig.ToString()));
+            scriptSigObj.push_back(Pair("hex", HexStr(txin.scriptSig.begin(), txin.scriptSig.end(), false)));
+            in.push_back(Pair("scriptSig", scriptSigObj));
+        }
+        in.push_back(Pair("sequence", (boost::int64_t)txin.nSequence));
+        vin.push_back(in);
+    }
+    result.push_back(Pair("vin", vin));
+
+    Array vout;
+    for (int i = 0; i < (int)tx.vout.size(); i++)
+    {
+        const CTxOut& txout = tx.vout[i];
+        Object out;
+        out.push_back(Pair("value", (double)txout.nValue / (double)COIN));
+        out.push_back(Pair("n", i));
+        out.push_back(Pair("scriptPubKey", ScriptPubKeyToJSON(txout.scriptPubKey)));
+        vout.push_back(out);
+    }
+    result.push_back(Pair("vout", vout));
+
+    return result;
+}
+
+
+Value decodescript(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "decodescript <hex string>\n"
+            "Decode a hex-encoded script.");
+
+    vector<unsigned char> scriptData = ParseHex(params[0].get_str());
+    CScript script(scriptData.begin(), scriptData.end());
+
+    Object result;
+    result.push_back(Pair("asm", script.ToString()));
+    result.push_back(Pair("hex", HexStr(script.begin(), script.end(), false)));
+
+    int nRequired;
+    Array addresses;
+    string strType = ClassifyScript(script, nRequired, addresses);
+    result.push_back(Pair("type", strType));
+    if (nRequired > 0)
+        result.push_back(Pair("reqSigs", nRequired));
+    if (addresses.size() > 0)
+        result.push_back(Pair("addresses", addresses));
+
+    return result;
+}
+
+
+Value createrawtransaction(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 2 || params.size() > 3)
+        throw runtime_error(
+            "createrawtransaction [{\"txid\":\"id\",\"vout\":n},...] {\"address\":amount,...} [locktime]\n"
+            "Create a transaction spending the given inputs and sending to the given addresses.\n"
+            "Returns hex-encoded raw transaction.\n"
+            "Note that the transaction's inputs are not signed, and\n"
+            "it is not stored in the wallet or transmitted to the network.\n"
+            "Output keys are Bitok addresses, \"data\" for OP_RETURN hex, or raw hex scriptPubKey.");
+
+    const Array& inputs = params[0].get_array();
+    const Object& sendTo = params[1].get_obj();
+
+    CTransaction rawTx;
+
+    foreach(const Value& input, inputs)
+    {
+        const Object& o = input.get_obj();
+
+        Value txidVal = find_value(o, "txid");
+        Value voutVal = find_value(o, "vout");
+
+        if (txidVal.type() != str_type || voutVal.type() != int_type)
+            throw runtime_error("Invalid input: each input must have txid (string) and vout (integer)");
+
+        uint256 txid;
+        txid.SetHex(txidVal.get_str());
+        int nOutput = voutVal.get_int();
+
+        if (nOutput < 0)
+            throw runtime_error("Invalid parameter, vout must be non-negative");
+
+        CTxIn in(COutPoint(txid, nOutput));
+
+        Value seqVal = find_value(o, "sequence");
+        if (seqVal.type() == int_type)
+            in.nSequence = (unsigned int)seqVal.get_int64();
+
+        rawTx.vin.push_back(in);
+    }
+
+    foreach(const Pair& s, sendTo)
+    {
+        if (s.name_ == "data")
+        {
+            vector<unsigned char> data = ParseHex(s.value_.get_str());
+            CScript scriptPubKey;
+            scriptPubKey << OP_RETURN;
+            if (!data.empty())
+                scriptPubKey << data;
+            rawTx.vout.push_back(CTxOut(0, scriptPubKey));
+        }
+        else
+        {
+            double dAmount = s.value_.get_real();
+            if (dAmount < 0.0 || dAmount > 21000000.0)
+                throw runtime_error("Invalid amount");
+            int64 nAmount = roundint64(dAmount * COIN);
+            if (!MoneyRange(nAmount))
+                throw runtime_error("Invalid amount");
+
+            CScript scriptPubKey;
+            if (!scriptPubKey.SetBitcoinAddress(s.name_))
+            {
+                vector<unsigned char> scriptBytes = ParseHex(s.name_);
+                if (scriptBytes.empty())
+                    throw runtime_error("Invalid address or script: " + s.name_);
+                scriptPubKey = CScript(scriptBytes.begin(), scriptBytes.end());
+            }
+
+            rawTx.vout.push_back(CTxOut(nAmount, scriptPubKey));
+        }
+    }
+
+    if (params.size() > 2)
+        rawTx.nLockTime = (unsigned int)params[2].get_int64();
+
+    CDataStream ss(SER_NETWORK);
+    ss << rawTx;
+    return HexStr(ss.begin(), ss.end(), false);
+}
+
+
+Value signrawtransaction(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 3)
+        throw runtime_error(
+            "signrawtransaction <hex string> [{\"txid\":\"id\",\"vout\":n,\"scriptPubKey\":\"hex\"},...] [\"privatekey1\",...]\n"
+            "Sign inputs for raw transaction (serialized, hex-encoded).\n"
+            "Second optional argument is an array of previous transaction outputs that\n"
+            "this transaction depends on but may not yet be in the block chain.\n"
+            "Third optional argument is an array of base58-encoded private keys that,\n"
+            "if given, will be the only keys used to sign the transaction.\n"
+            "Returns json object with keys:\n"
+            "  hex : raw transaction with signature(s) (hex-encoded string)\n"
+            "  complete : true if transaction has a complete set of signatures\n");
+
+    vector<unsigned char> txData = ParseHex(params[0].get_str());
+    CDataStream ssData(txData, SER_NETWORK);
+    CTransaction txToSign;
+    try {
+        ssData >> txToSign;
+    } catch (std::exception &e) {
+        throw runtime_error("TX decode failed");
+    }
+
+    map<COutPoint, CScript> mapPrevOut;
+    if (params.size() > 1 && params[1].type() != null_type)
+    {
+        const Array& prevTxs = params[1].get_array();
+        foreach(const Value& p, prevTxs)
+        {
+            const Object& prevOut = p.get_obj();
+
+            Value txidVal = find_value(prevOut, "txid");
+            Value voutVal = find_value(prevOut, "vout");
+            Value scriptVal = find_value(prevOut, "scriptPubKey");
+
+            if (txidVal.type() != str_type || voutVal.type() != int_type || scriptVal.type() != str_type)
+                throw runtime_error("Invalid prevtx: must have txid, vout, and scriptPubKey");
+
+            uint256 txid;
+            txid.SetHex(txidVal.get_str());
+
+            vector<unsigned char> scriptData = ParseHex(scriptVal.get_str());
+            CScript scriptPubKey(scriptData.begin(), scriptData.end());
+
+            mapPrevOut[COutPoint(txid, voutVal.get_int())] = scriptPubKey;
+        }
+    }
+
+    bool fGivenKeys = false;
+    map<uint160, CKey> mapTempKeys;
+    if (params.size() > 2 && params[2].type() != null_type)
+    {
+        fGivenKeys = true;
+        const Array& keys = params[2].get_array();
+        foreach(const Value& k, keys)
+        {
+            string strSecret = k.get_str();
+            vector<unsigned char> vchWIF;
+            if (!DecodeBase58Check(strSecret, vchWIF))
+                throw runtime_error("Invalid private key encoding");
+            if (vchWIF.size() < 33 || vchWIF[0] != 128)
+                throw runtime_error("Invalid private key version");
+
+            vector<unsigned char> vchSecret(vchWIF.begin() + 1, vchWIF.begin() + 33);
+            CKey key;
+            if (!key.SetSecret(vchSecret))
+                throw runtime_error("Invalid private key");
+
+            uint160 hash160 = Hash160(key.GetPubKey());
+            mapTempKeys[hash160] = key;
+        }
+    }
+
+    bool fComplete = true;
+    for (unsigned int i = 0; i < txToSign.vin.size(); i++)
+    {
+        CTxIn& txin = txToSign.vin[i];
+
+        if (txin.prevout.IsNull())
+            continue;
+
+        CScript scriptPubKey;
+        bool fFoundPrev = false;
+
+        if (mapPrevOut.count(txin.prevout))
+        {
+            scriptPubKey = mapPrevOut[txin.prevout];
+            fFoundPrev = true;
+        }
+
+        if (!fFoundPrev)
+        {
+            CRITICAL_BLOCK(cs_mapWallet)
+            {
+                if (mapWallet.count(txin.prevout.hash))
+                {
+                    const CWalletTx& wtx = mapWallet[txin.prevout.hash];
+                    if (txin.prevout.n < wtx.vout.size())
+                    {
+                        scriptPubKey = wtx.vout[txin.prevout.n].scriptPubKey;
+                        fFoundPrev = true;
+                    }
+                }
+            }
+        }
+
+        if (!fFoundPrev)
+        {
+            CTxDB txdb("r");
+            CTransaction txPrev;
+            CTxIndex txindex;
+            if (txdb.ReadDiskTx(txin.prevout.hash, txPrev, txindex))
+            {
+                if (txin.prevout.n < txPrev.vout.size())
+                {
+                    scriptPubKey = txPrev.vout[txin.prevout.n].scriptPubKey;
+                    fFoundPrev = true;
+                }
+            }
+        }
+
+        if (!fFoundPrev)
+        {
+            CRITICAL_BLOCK(cs_mapTransactions)
+            {
+                if (mapTransactions.count(txin.prevout.hash))
+                {
+                    const CTransaction& txPrev = mapTransactions[txin.prevout.hash];
+                    if (txin.prevout.n < txPrev.vout.size())
+                    {
+                        scriptPubKey = txPrev.vout[txin.prevout.n].scriptPubKey;
+                        fFoundPrev = true;
+                    }
+                }
+            }
+        }
+
+        if (!fFoundPrev)
+        {
+            fComplete = false;
+            continue;
+        }
+
+        if (txin.prevout.n >= 100000)
+        {
+            fComplete = false;
+            continue;
+        }
+
+        CScript scriptSigSaved = txin.scriptSig;
+        bool fSigned = false;
+
+        if (fGivenKeys)
+        {
+            uint256 hash = SignatureHash(scriptPubKey, txToSign, i, SIGHASH_ALL);
+
+            uint160 h160;
+            if (ExtractHash160(scriptPubKey, h160) && mapTempKeys.count(h160))
+            {
+                CKey& key = mapTempKeys[h160];
+                vector<unsigned char> vchSig;
+                if (key.Sign(hash, vchSig))
+                {
+                    vchSig.push_back((unsigned char)SIGHASH_ALL);
+                    CScript scriptSig;
+                    scriptSig << vchSig << key.GetPubKey();
+                    txin.scriptSig = scriptSig;
+                    fSigned = true;
+                }
+            }
+
+            if (!fSigned)
+            {
+                vector<unsigned char> vchScriptPubKey;
+                if (scriptPubKey.size() == 35 && scriptPubKey[0] == 33 && scriptPubKey[34] == OP_CHECKSIG)
+                    vchScriptPubKey.assign(scriptPubKey.begin() + 1, scriptPubKey.begin() + 34);
+                else if (scriptPubKey.size() == 67 && scriptPubKey[0] == 65 && scriptPubKey[66] == OP_CHECKSIG)
+                    vchScriptPubKey.assign(scriptPubKey.begin() + 1, scriptPubKey.begin() + 66);
+
+                if (!vchScriptPubKey.empty())
+                {
+                    uint160 pk160 = Hash160(vchScriptPubKey);
+                    if (mapTempKeys.count(pk160))
+                    {
+                        CKey& key = mapTempKeys[pk160];
+                        vector<unsigned char> vchSig;
+                        if (key.Sign(hash, vchSig))
+                        {
+                            vchSig.push_back((unsigned char)SIGHASH_ALL);
+                            CScript scriptSig;
+                            scriptSig << vchSig;
+                            txin.scriptSig = scriptSig;
+                            fSigned = true;
+                        }
+                    }
+                }
+            }
+
+            if (fSigned)
+            {
+                unsigned int nVerifyFlags = SCRIPT_VERIFY_NONE;
+                if (nBestHeight + 1 >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+                    nVerifyFlags |= SCRIPT_VERIFY_EXEC;
+                if (!VerifyScript(txin.scriptSig, scriptPubKey, txToSign, i, 0, nVerifyFlags))
+                {
+                    txin.scriptSig = scriptSigSaved;
+                    fSigned = false;
+                }
+            }
+        }
+        else
+        {
+            CTransaction txFake;
+            txFake.vout.resize(txin.prevout.n + 1);
+            txFake.vout[txin.prevout.n].scriptPubKey = scriptPubKey;
+
+            fSigned = SignSignature(txFake, txToSign, i, SIGHASH_ALL);
+        }
+
+        if (!fSigned)
+        {
+            txin.scriptSig = scriptSigSaved;
+            fComplete = false;
+        }
+    }
+
+    CDataStream ss(SER_NETWORK);
+    ss << txToSign;
+
+    Object result;
+    result.push_back(Pair("hex", HexStr(ss.begin(), ss.end(), false)));
+    result.push_back(Pair("complete", fComplete));
+    return result;
+}
+
+
 //
 // Call Table
 //
@@ -1845,6 +2342,10 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("dumpprivkey",           &dumpprivkey),
     make_pair("importprivkey",         &importprivkey),
     make_pair("rescanwallet",          &rescanwallet),
+    make_pair("decoderawtransaction",  &decoderawtransaction),
+    make_pair("decodescript",          &decodescript),
+    make_pair("createrawtransaction",  &createrawtransaction),
+    make_pair("signrawtransaction",    &signrawtransaction),
 };
 map<string, rpcfn_type> mapCallTable(pCallTable, pCallTable + sizeof(pCallTable)/sizeof(pCallTable[0]));
 
@@ -2324,6 +2825,11 @@ int CommandLineRPC(int argc, char *argv[])
             if (strMethod == "listreceivedbyaddress"  && n > 1) ConvertTo<bool>(params[1]);
             if (strMethod == "listreceivedbylabel"    && n > 0) ConvertTo<boost::int64_t>(params[0]);
             if (strMethod == "listreceivedbylabel"    && n > 1) ConvertTo<bool>(params[1]);
+            if (strMethod == "createrawtransaction"   && n > 0) ConvertTo<Array>(params[0]);
+            if (strMethod == "createrawtransaction"   && n > 1) ConvertTo<Object>(params[1]);
+            if (strMethod == "createrawtransaction"   && n > 2) ConvertTo<boost::int64_t>(params[2]);
+            if (strMethod == "signrawtransaction"     && n > 1) ConvertTo<Array>(params[1]);
+            if (strMethod == "signrawtransaction"     && n > 2) ConvertTo<Array>(params[2]);
 
             // Execute
             result = CallRPC(strMethod, params);

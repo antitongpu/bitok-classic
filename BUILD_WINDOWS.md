@@ -7,7 +7,7 @@ This is Satoshi's original code from 2010, adapted to run on modern Windows with
 **Main target: GUI Wallet (`bitok.exe`)** - Windows users expect double-click simplicity!
 
 For mining details, see [BITOKPOW.md](BITOKPOW.md).
-For philosophy, see [MANIFESTO.md](MANIFESTO.md).
+
 
 ---
 

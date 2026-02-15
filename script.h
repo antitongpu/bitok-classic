@@ -346,8 +346,7 @@ inline string ValueString(const vector<unsigned char>& vch)
     if (vch.size() <= 4)
         return strprintf("%d", CBigNum(vch).getint());
     else
-        return HexNumStr(vch.begin(), vch.end());
-        //return string("(") + HexStr(vch.begin(), vch.end()) + string(")");
+        return HexStr(vch.begin(), vch.end(), false);
 }
 
 inline string StackString(const vector<vector<unsigned char> >& vStack)
