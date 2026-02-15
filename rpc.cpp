@@ -1188,7 +1188,7 @@ Value getrawtransaction(const Array& params, bool fHelp)
 
     CDataStream ssTx;
     ssTx << tx;
-    string strHex = HexStr(ssTx.begin(), ssTx.end());
+    string strHex = HexStr(ssTx.begin(), ssTx.end(), false);
 
     if (!fVerbose)
         return strHex;

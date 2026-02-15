@@ -1110,6 +1110,259 @@ def scan_recent_deposits(rpc, min_confirmations=6):
 
 ---
 
+### createrawtransaction
+
+Creates an unsigned raw transaction spending the given inputs and sending to the given addresses. The transaction is not signed, not stored in the wallet, and not broadcast.
+
+**Parameters:**
+- `inputs` (array, required) - Array of input objects: `[{"txid":"hex","vout":n}, ...]`
+- `outputs` (object, required) - Object mapping addresses to amounts: `{"address":amount, ...}`. Use `"data"` as the key for OP_RETURN outputs (value is hex data). Keys can also be raw hex scriptPubKeys.
+- `locktime` (number, optional, default=0) - Transaction lock time
+
+**Returns:** String (hex-encoded unsigned raw transaction)
+
+**Example:**
+```bash
+./bitokd createrawtransaction \
+  '[{"txid":"a1b2c3d4...","vout":0}]' \
+  '{"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa":0.5,"1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2":0.499}'
+```
+
+**With OP_RETURN data output:**
+```bash
+./bitokd createrawtransaction \
+  '[{"txid":"a1b2c3d4...","vout":0}]' \
+  '{"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa":0.999,"data":"48656c6c6f"}'
+```
+
+**Response:**
+```
+"0100000001abcdef..."
+```
+
+**Use Case - Programmatic Transaction Construction:**
+```python
+def build_transaction(rpc, inputs, recipients, change_address, fee=0.001):
+    """Build an unsigned raw transaction with change output"""
+    utxo_inputs = [{"txid": u['txid'], "vout": u['vout']} for u in inputs]
+    total_in = sum(u['amount'] for u in inputs)
+    total_out = sum(recipients.values())
+    change = total_in - total_out - fee
+
+    outputs = dict(recipients)
+    if change > 0:
+        outputs[change_address] = round(change, 8)
+
+    raw_tx = rpc.call('createrawtransaction', [utxo_inputs, outputs])
+    return raw_tx
+```
+
+**Important Notes:**
+- Inputs are not validated against the UTXO set at creation time
+- The caller is responsible for computing change and including a change output
+- Any difference between total inputs and total outputs becomes the miner fee
+- OP_RETURN outputs use key `"data"` with hex-encoded payload (no amount)
+
+---
+
+### signrawtransaction
+
+Signs inputs for a raw transaction. Can sign with wallet keys automatically, or with explicitly provided private keys.
+
+**Parameters:**
+- `hex` (string, required) - Hex-encoded raw transaction to sign
+- `prevtxs` (array, optional) - Array of previous transaction outputs: `[{"txid":"hex","vout":n,"scriptPubKey":"hex"}, ...]`. Required for offline signing when the node doesn't have the referenced UTXOs.
+- `privkeys` (array, optional) - Array of WIF-encoded private keys: `["key1", ...]`. If provided, only these keys are used for signing.
+
+**Returns:** Object containing:
+- `hex` (string) - Hex-encoded transaction with signature(s)
+- `complete` (boolean) - True if all inputs are fully signed
+
+**Example (sign with wallet keys):**
+```bash
+./bitokd signrawtransaction "0100000001abcdef..."
+```
+
+**Example (offline signing with explicit keys and prevouts):**
+```bash
+./bitokd signrawtransaction "0100000001abcdef..." \
+  '[{"txid":"a1b2...","vout":0,"scriptPubKey":"76a914...88ac"}]' \
+  '["5Kb8kLf9zgWQnogidDA76MzPL6TsZZY36hWXMssSzNydYXYB9KF"]'
+```
+
+**Response:**
+```json
+{
+  "hex": "0100000001abcdef...signed...",
+  "complete": true
+}
+```
+
+**Use Case - Offline / Cold Wallet Signing:**
+```python
+def sign_offline(rpc, raw_tx, prevouts, private_keys):
+    """Sign a transaction on an air-gapped machine"""
+    result = rpc.call('signrawtransaction', [raw_tx, prevouts, private_keys])
+
+    if result['complete']:
+        return result['hex']
+    else:
+        raise Exception("Incomplete signatures - additional keys may be required")
+
+def sign_and_broadcast(rpc, raw_tx):
+    """Sign with wallet keys and broadcast"""
+    signed = rpc.call('signrawtransaction', [raw_tx])
+    if not signed['complete']:
+        raise Exception("Could not fully sign transaction")
+    txid = rpc.call('sendrawtransaction', [signed['hex']])
+    return txid
+```
+
+**Important Notes:**
+- Without `privkeys`, the wallet's keys are tried automatically
+- Supports P2PKH and P2PK script types
+- Safe for incremental multi-party signing -- failed sign attempts preserve existing signatures
+- The `prevtxs` parameter is needed when the spending UTXO is not available in the node's transaction index (e.g., offline signing)
+
+---
+
+### decoderawtransaction
+
+Decodes a hex-encoded raw transaction into a human-readable JSON object.
+
+**Parameters:**
+- `hex` (string, required) - Hex-encoded serialized transaction
+
+**Returns:** Object containing:
+- `txid` (string) - Transaction ID
+- `version` (number) - Transaction version
+- `locktime` (number) - Lock time
+- `vin` (array) - Array of inputs with:
+  - `txid` (string) - Previous transaction ID (or `coinbase` for coinbase inputs)
+  - `vout` (number) - Previous output index
+  - `scriptSig` (object) - `{"asm": "...", "hex": "..."}`
+  - `sequence` (number) - Sequence number
+- `vout` (array) - Array of outputs with:
+  - `value` (number) - Amount in BITOK
+  - `n` (number) - Output index
+  - `scriptPubKey` (object) - `{"asm": "...", "hex": "...", "type": "...", "reqSigs": n, "addresses": [...]}`
+
+**Example:**
+```bash
+./bitokd decoderawtransaction "0100000001abcdef..."
+```
+
+**Response:**
+```json
+{
+  "txid": "a1b2c3...",
+  "version": 1,
+  "locktime": 0,
+  "vin": [
+    {
+      "txid": "prev_txid...",
+      "vout": 0,
+      "scriptSig": {
+        "asm": "304402... 04abcd...",
+        "hex": "4830440220..."
+      },
+      "sequence": 4294967295
+    }
+  ],
+  "vout": [
+    {
+      "value": 0.50000000,
+      "n": 0,
+      "scriptPubKey": {
+        "asm": "OP_DUP OP_HASH160 89abcd... OP_EQUALVERIFY OP_CHECKSIG",
+        "hex": "76a914...",
+        "type": "pubkeyhash",
+        "reqSigs": 1,
+        "addresses": ["1A1zP1..."]
+      }
+    }
+  ]
+}
+```
+
+**Use Case - Transaction Inspection Before Broadcast:**
+```python
+def inspect_transaction(rpc, raw_tx_hex):
+    """Decode and inspect a raw transaction before signing/broadcasting"""
+    decoded = rpc.call('decoderawtransaction', [raw_tx_hex])
+
+    total_out = sum(out['value'] for out in decoded['vout'])
+    print(f"Transaction {decoded['txid']}")
+    print(f"  Inputs: {len(decoded['vin'])}")
+    print(f"  Outputs: {len(decoded['vout'])}")
+    print(f"  Total output: {total_out} BITOK")
+
+    for out in decoded['vout']:
+        spk = out['scriptPubKey']
+        addrs = ', '.join(spk.get('addresses', ['N/A']))
+        print(f"  -> {out['value']} BITOK to {addrs} ({spk['type']})")
+
+    return decoded
+```
+
+---
+
+### decodescript
+
+Decodes a raw hex script into human-readable form with type classification.
+
+**Parameters:**
+- `hex` (string, required) - Hex-encoded script
+
+**Returns:** Object containing:
+- `asm` (string) - Human-readable disassembly of the script
+- `hex` (string) - The original hex
+- `type` (string) - Script type classification
+- `reqSigs` (number) - Required signatures
+- `addresses` (array) - Associated addresses
+
+**Recognized script types:**
+
+| Type | Description |
+|------|-------------|
+| `pubkeyhash` | Standard P2PKH (`OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG`) |
+| `pubkey` | Pay-to-public-key (compressed 33-byte or uncompressed 65-byte) |
+| `multisig` | Bare multisig (`OP_m <keys> OP_n OP_CHECKMULTISIG`) |
+| `nulldata` | Data carrier (`OP_RETURN [data]`) |
+| `nonstandard` | Unrecognized script pattern |
+
+**Example:**
+```bash
+./bitokd decodescript "76a91489abcdefabbaabbaabbaabbaabbaabbaabbaabba88ac"
+```
+
+**Response:**
+```json
+{
+  "asm": "OP_DUP OP_HASH160 89abcd... OP_EQUALVERIFY OP_CHECKSIG",
+  "hex": "76a914...88ac",
+  "type": "pubkeyhash",
+  "reqSigs": 1,
+  "addresses": ["1A1zP1..."]
+}
+```
+
+**Use Case - Script Analysis:**
+```python
+def analyze_script(rpc, script_hex):
+    """Analyze a scriptPubKey to determine its type and addresses"""
+    decoded = rpc.call('decodescript', [script_hex])
+
+    return {
+        'type': decoded['type'],
+        'required_signatures': decoded.get('reqSigs', 0),
+        'addresses': decoded.get('addresses', []),
+        'asm': decoded['asm']
+    }
+```
+
+---
+
 ## Mining Operations
 
 ### getgenerate
@@ -2615,6 +2868,10 @@ def send_with_logging(rpc, address, amount, user_id):
 | rescanwallet | Wallet | Rescan blockchain for wallet transactions |
 | sendtoaddress | Transaction | Send coins |
 | listtransactions | Transaction | List recent transactions |
+| createrawtransaction | Transaction | Create unsigned raw transaction |
+| signrawtransaction | Transaction | Sign raw transaction inputs |
+| decoderawtransaction | Transaction | Decode raw transaction to JSON |
+| decodescript | Transaction | Decode hex script to JSON |
 | listunspent | Wallet | List unspent transaction outputs (UTXOs) |
 | getreceivedbyaddress | Wallet | Get amount received by address |
 | getreceivedbylabel | Wallet | Get amount received by label |
