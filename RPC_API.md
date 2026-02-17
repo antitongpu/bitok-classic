@@ -2,7 +2,7 @@
 
 JSON-RPC API for exchanges, mining pools, block explorers, and whatever else you need it for.
 
-Version: Bitok 0.3.19 Mainnet
+Version: Bitok 0.3.19.8 Mainnet
 
 ---
 
@@ -13,13 +13,15 @@ Version: Bitok 0.3.19 Mainnet
 3. [General Information](#general-information)
 4. [Wallet Operations](#wallet-operations)
 5. [Transaction Operations](#transaction-operations)
-6. [Mining Operations](#mining-operations)
-7. [Network Operations](#network-operations)
-8. [Block Chain Operations](#block-chain-operations)
-9. [SPV Client Operations](#spv-client-operations)
-10. [Integration Examples](#integration-examples)
-11. [Error Handling](#error-handling)
-12. [Security Best Practices](#security-best-practices)
+6. [Multisig Operations](#multisig-operations)
+7. [Script Analysis](#script-analysis)
+8. [Mining Operations](#mining-operations)
+9. [Network Operations](#network-operations)
+10. [Block Chain Operations](#block-chain-operations)
+11. [SPV Client Operations](#spv-client-operations)
+12. [Integration Examples](#integration-examples)
+13. [Error Handling](#error-handling)
+14. [Security Best Practices](#security-best-practices)
 
 ---
 
@@ -1363,6 +1365,364 @@ def analyze_script(rpc, script_hex):
 
 ---
 
+## Multisig Operations
+
+### createmultisig
+
+Creates a multi-signature script from the given public keys. Does not touch the wallet -- the result is a standalone script you can use in raw transactions.
+
+**Parameters:**
+- `nrequired` (number, required) - Number of signatures required to spend (minimum 1)
+- `keys` (array, required) - Array of hex-encoded public keys (compressed 33-byte or uncompressed 65-byte). Max 20 keys.
+
+**Returns:** Object containing:
+- `asm` (string) - Human-readable disassembly of the multisig script
+- `hex` (string) - Hex-encoded multisig script
+- `type` (string) - Script type (e.g., "2-of-3")
+- `reqSigs` (number) - Number of required signatures
+- `addresses` (array) - Bitok addresses derived from each public key
+
+**Example:**
+```bash
+./bitokd createmultisig 2 '["04a882d4...","04b7ecd0...","04c9a1f3..."]'
+```
+
+**Response:**
+```json
+{
+  "asm": "OP_2 04a882d4... 04b7ecd0... 04c9a1f3... OP_3 OP_CHECKMULTISIG",
+  "hex": "524104a882d4...4104b7ecd0...4104c9a1f3...53ae",
+  "type": "2-of-3",
+  "reqSigs": 2,
+  "addresses": [
+    "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+    "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+    "1HLoD9E4SDFFPDiYfNYnkBLQ85Y51J3Zb1"
+  ]
+}
+```
+
+**Use Case - Offline Multisig Setup:**
+```python
+def create_multisig_escrow(rpc, buyer_pubkey, seller_pubkey, arbiter_pubkey):
+    """Create a 2-of-3 escrow script without modifying any wallet"""
+    result = rpc.call('createmultisig', [2, [buyer_pubkey, seller_pubkey, arbiter_pubkey]])
+
+    return {
+        'script_hex': result['hex'],
+        'type': result['type'],
+        'participant_addresses': result['addresses']
+    }
+```
+
+**Important Notes:**
+- Each key must be a raw hex public key (not an address)
+- Supports 1-of-1 through 16-of-16 (up to 20 keys allowed)
+- The script is not added to the wallet -- use `addmultisigaddress` if you need to track payments
+- nrequired must be between 1 and the number of keys provided
+
+---
+
+### addmultisigaddress
+
+Creates a multi-signature script and adds it to the wallet so incoming payments to it are tracked.
+
+**Parameters:**
+- `nrequired` (number, required) - Number of signatures required to spend (minimum 1)
+- `keys` (array, required) - Array of hex-encoded public keys or Bitok addresses. If a Bitok address is provided, the wallet resolves it to its public key (must be in the wallet). Max 20 keys.
+- `label` (string, optional) - Label to assign to the multisig script in the wallet
+
+**Returns:** Object containing:
+- `hex` (string) - Hex-encoded multisig script
+- `asm` (string) - Human-readable disassembly
+- `type` (string) - Script type (e.g., "2-of-3")
+- `reqSigs` (number) - Number of required signatures
+- `addresses` (array) - Bitok addresses derived from each public key
+
+**Example (using hex public keys):**
+```bash
+./bitokd addmultisigaddress 2 '["04a882d4...","04b7ecd0..."]' "shared_savings"
+```
+
+**Example (using wallet addresses):**
+```bash
+./bitokd addmultisigaddress 2 '["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa","04b7ecd0..."]' "escrow"
+```
+
+**Response:**
+```json
+{
+  "hex": "524104a882d4...4104b7ecd0...52ae",
+  "asm": "OP_2 04a882d4... 04b7ecd0... OP_2 OP_CHECKMULTISIG",
+  "type": "2-of-2",
+  "reqSigs": 2,
+  "addresses": [
+    "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+    "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
+  ]
+}
+```
+
+**Use Case - Tracked Multisig Wallet:**
+```python
+def setup_tracked_multisig(rpc, required, keys, label):
+    """Create multisig and add to wallet for payment tracking"""
+    result = rpc.call('addmultisigaddress', [required, keys, label])
+
+    return {
+        'script_hex': result['hex'],
+        'type': result['type'],
+        'addresses': result['addresses']
+    }
+
+def full_multisig_workflow(rpc, pubkeys):
+    """Complete multisig setup and funding workflow"""
+    # Create and track 2-of-3 multisig
+    ms = rpc.call('addmultisigaddress', [2, pubkeys, "team_funds"])
+    script_hex = ms['hex']
+
+    # Fund it using createrawtransaction with the script hex as output key
+    utxos = rpc.call('listunspent', [6])
+    inputs = [{"txid": utxos[0]['txid'], "vout": utxos[0]['vout']}]
+    outputs = {script_hex: 10.0}
+    raw_tx = rpc.call('createrawtransaction', [inputs, outputs])
+    signed = rpc.call('signrawtransaction', [raw_tx])
+
+    if signed['complete']:
+        txid = rpc.call('sendrawtransaction', [signed['hex']])
+        return {'funded': True, 'txid': txid}
+    return {'funded': False}
+```
+
+**Difference from `createmultisig`:**
+- `createmultisig` is purely offline -- it builds the script and returns it. Nothing touches the wallet.
+- `addmultisigaddress` does the same but also stores the script in the wallet, so `listtransactions` and `listunspent` will report payments to it.
+- `addmultisigaddress` accepts Bitok addresses as keys (resolved via wallet lookup), while `createmultisig` requires raw hex public keys.
+
+---
+
+## Script Analysis
+
+### analyzescript
+
+Static analysis of a hex-encoded script. Reports opcode statistics, type classification, sigop count, and whether the script fits within consensus limits.
+
+**Parameters:**
+- `hex` (string, required) - Hex-encoded script
+
+**Returns:** Object containing:
+- `asm` (string) - Human-readable disassembly
+- `hex` (string) - Original hex
+- `size` (number) - Script size in bytes
+- `type` (string) - Script type classification (pubkeyhash, pubkey, multisig, nulldata, nonstandard)
+- `reqSigs` (number, conditional) - Required signatures (if applicable)
+- `addresses` (array, conditional) - Associated addresses (if applicable)
+- `opcodes` (object) - Opcode statistics:
+  - `counted` (number) - Number of counted opcodes (excluding pushes)
+  - `pushes` (number) - Number of push operations
+  - `distinct` (array) - List of distinct opcode names used
+  - `categories` (object) - Opcodes grouped by category:
+    - `crypto` - Hashing and signature opcodes
+    - `stack` - Stack manipulation opcodes
+    - `flow` - Control flow opcodes
+    - `arithmetic` - Math opcodes
+    - `splice` - String/splice opcodes (OP_CAT, OP_SUBSTR, etc.)
+    - `bitwise` - Bitwise opcodes (OP_AND, OP_OR, OP_XOR, etc.)
+- `sigops` (number) - Signature operation count
+- `maxPushSize` (number, conditional) - Largest push data size in bytes
+- `limits` (object) - Limit compliance check:
+  - `size` (string) - "current/max" (e.g., "35/10000")
+  - `opcodes` (string) - "current/max" (e.g., "5/201")
+  - `sigops` (string) - "current/max" (e.g., "1/20000")
+  - `maxPushSize` (string, conditional) - "current/max" (e.g., "20/520")
+  - `withinLimits` (boolean) - True if all limits are satisfied
+
+**Example (P2PKH script):**
+```bash
+./bitokd analyzescript "76a91489abcdefabbaabbaabbaabbaabbaabbaabbaabba88ac"
+```
+
+**Response:**
+```json
+{
+  "asm": "OP_DUP OP_HASH160 89abcdef... OP_EQUALVERIFY OP_CHECKSIG",
+  "hex": "76a91489abcdef...88ac",
+  "size": 25,
+  "type": "pubkeyhash",
+  "reqSigs": 1,
+  "addresses": ["1A1zP1..."],
+  "opcodes": {
+    "counted": 5,
+    "pushes": 1,
+    "distinct": ["OP_DUP", "OP_HASH160", "OP_EQUALVERIFY", "OP_CHECKSIG"],
+    "categories": {
+      "crypto": ["OP_CHECKSIG", "OP_HASH160"],
+      "stack": ["OP_DUP"],
+      "flow": [],
+      "arithmetic": [],
+      "splice": [],
+      "bitwise": ["OP_EQUALVERIFY"]
+    }
+  },
+  "sigops": 1,
+  "maxPushSize": 20,
+  "limits": {
+    "size": "25/10000",
+    "opcodes": "5/201",
+    "sigops": "1/20000",
+    "maxPushSize": "20/520",
+    "withinLimits": true
+  }
+}
+```
+
+**Use Case - Pre-deployment Script Validation:**
+```python
+def check_script_deployable(rpc, script_hex):
+    """Verify a script fits within consensus limits before broadcasting"""
+    analysis = rpc.call('analyzescript', [script_hex])
+
+    if not analysis['limits']['withinLimits']:
+        return {
+            'deployable': False,
+            'size': analysis['limits']['size'],
+            'opcodes': analysis['limits']['opcodes']
+        }
+
+    return {
+        'deployable': True,
+        'type': analysis['type'],
+        'sigops': analysis['sigops'],
+        'size': analysis['size']
+    }
+
+def audit_unknown_script(rpc, script_hex):
+    """Inspect an unknown script found on-chain"""
+    analysis = rpc.call('analyzescript', [script_hex])
+
+    return {
+        'type': analysis['type'],
+        'asm': analysis['asm'],
+        'opcode_categories': analysis['opcodes']['categories'],
+        'sigops': analysis['sigops'],
+        'within_limits': analysis['limits']['withinLimits']
+    }
+```
+
+---
+
+### validatescript
+
+Executes a script in sandbox mode with pre-loaded stack values and reports the result. Useful for testing script logic offline without broadcasting a transaction.
+
+**Parameters:**
+- `script` (string, required) - Hex-encoded script to execute
+- `stack` (array, optional) - Array of hex-encoded values to pre-load on the stack (simulates what scriptSig would push)
+- `flags` (string, optional, default="exec") - Execution mode:
+  - `"exec"` - Post-block-18000 rules (strict limits, separated evaluation)
+  - `"legacy"` - Pre-block-18000 rules (original behavior)
+
+**Returns:** Object containing:
+- `valid` (boolean) - True if the script passes verification (executed successfully and top stack element is truthy)
+- `success` (boolean) - True if the script ran without error (even if result is falsy)
+- `finalStack` (array) - Hex-encoded values remaining on stack after execution
+- `stackSize` (number) - Number of items on the final stack
+- `warnings` (array, conditional) - Diagnostic warnings if execution failed:
+  - Script size limit exceeded
+  - Signature-checking opcodes present (always fail without transaction context)
+  - Opcode count limit exceeded
+
+**Example (OP_EQUAL: test if two values are equal):**
+```bash
+./bitokd validatescript "87" '["01","01"]'
+```
+
+**Response:**
+```json
+{
+  "valid": true,
+  "success": true,
+  "finalStack": ["01"],
+  "stackSize": 1
+}
+```
+
+**Example (OP_ADD OP_5 OP_EQUAL: test 3 + 2 == 5):**
+```bash
+./bitokd validatescript "935587" '["03","02"]'
+```
+
+**Response:**
+```json
+{
+  "valid": true,
+  "success": true,
+  "finalStack": ["01"],
+  "stackSize": 1
+}
+```
+
+**Example (failing script):**
+```bash
+./bitokd validatescript "87" '["01","02"]'
+```
+
+**Response:**
+```json
+{
+  "valid": false,
+  "success": true,
+  "finalStack": [""],
+  "stackSize": 1
+}
+```
+
+**Example (legacy mode):**
+```bash
+./bitokd validatescript "935587" '["03","02"]' "legacy"
+```
+
+**Use Case - Script Development and Testing:**
+```python
+def test_hash_lock(rpc, secret_hex, expected_hash_hex):
+    """Test a hash lock script: OP_SHA256 <hash> OP_EQUAL"""
+    script_hex = "a8" + format(len(bytes.fromhex(expected_hash_hex)), '02x') + expected_hash_hex + "87"
+    stack = [secret_hex]
+
+    result = rpc.call('validatescript', [script_hex, stack])
+    return result['valid']
+
+def test_arithmetic_condition(rpc, script_hex, stack_values):
+    """Test arithmetic script logic with known inputs"""
+    result = rpc.call('validatescript', [script_hex, stack_values, "exec"])
+
+    return {
+        'passes': result['valid'],
+        'ran_ok': result['success'],
+        'final_stack': result['finalStack'],
+        'warnings': result.get('warnings', [])
+    }
+
+def compare_exec_modes(rpc, script_hex, stack_values):
+    """Compare script behavior under exec vs legacy rules"""
+    exec_result = rpc.call('validatescript', [script_hex, stack_values, "exec"])
+    legacy_result = rpc.call('validatescript', [script_hex, stack_values, "legacy"])
+
+    return {
+        'exec_valid': exec_result['valid'],
+        'legacy_valid': legacy_result['valid'],
+        'behavior_differs': exec_result['valid'] != legacy_result['valid']
+    }
+```
+
+**Important Notes:**
+- OP_CHECKSIG and OP_CHECKMULTISIG always fail in sandbox mode (no real transaction context). A warning is returned when these opcodes are present.
+- `valid` means the script executed successfully AND the top stack element is truthy (non-zero, non-empty)
+- `success` means the script ran without hitting an error, even if the final result is falsy
+- Use `"exec"` mode to test against post-activation rules (block 18,000+) and `"legacy"` for pre-activation behavior
+
+---
+
 ## Mining Operations
 
 ### getgenerate
@@ -2618,6 +2978,11 @@ The RPC interface returns HTTP status codes and JSON-RPC errors:
 | TX decode failed | Malformed transaction | Verify hex encoding of raw transaction |
 | Missing inputs | UTXO not found or spent | Referenced transaction outputs do not exist |
 | Transaction not found in any block | Unconfirmed tx | Wait for confirmation or specify blockhash |
+| Invalid public key | Bad hex pubkey in multisig | Provide valid 33-byte (compressed) or 65-byte (uncompressed) hex pubkey |
+| Address not in wallet | Address used in addmultisigaddress not in wallet | Use hex pubkey instead, or import the key first |
+| Too many keys | Multisig exceeds 20-key limit | Use 20 or fewer public keys |
+| Script exceeds maximum size | Script too large | Keep scripts under 10,000 bytes |
+| Empty script | No script data provided | Provide a valid hex-encoded script |
 
 ### Error Handling Example
 
@@ -2872,6 +3237,10 @@ def send_with_logging(rpc, address, amount, user_id):
 | signrawtransaction | Transaction | Sign raw transaction inputs |
 | decoderawtransaction | Transaction | Decode raw transaction to JSON |
 | decodescript | Transaction | Decode hex script to JSON |
+| createmultisig | Multisig | Create multisig script from public keys |
+| addmultisigaddress | Multisig | Create multisig script and add to wallet |
+| analyzescript | Script | Static analysis of hex-encoded script |
+| validatescript | Script | Sandbox script execution with stack inputs |
 | listunspent | Wallet | List unspent transaction outputs (UTXOs) |
 | getreceivedbyaddress | Wallet | Get amount received by address |
 | getreceivedbylabel | Wallet | Get amount received by label |
@@ -2882,10 +3251,6 @@ def send_with_logging(rpc, address, amount, user_id):
 | gettxoutproof | SPV | Get Merkle proof of transaction inclusion |
 | verifytxoutproof | SPV | Verify a Merkle proof |
 
-### Version History
-
-- **Bitcoin v0.3.19** (2010) - Latest original implementation by Satoshi Nakamoto
-- **Bitok** (2016) - Modern system compatibility, Yespower integration
 
 ### Additional Resources
 
@@ -2907,4 +3272,4 @@ For technical support and integration assistance:
 **Last Updated:** 2026
 **License:** MIT/X11
 
-*This documentation covers the RPC API as implemented in Bitok 0.3.19 Mainnet. Always test thoroughly in a development environment before deploying to production.*
+*This documentation covers the RPC API as implemented in Bitok 0.3.19.8 Mainnet. Always test thoroughly in a development environment before deploying to production.*
