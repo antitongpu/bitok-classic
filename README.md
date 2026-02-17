@@ -63,13 +63,16 @@ What this means in practice:
 - **OP_MUL, OP_DIV, OP_MOD, OP_LSHIFT, OP_RSHIFT** are live. On-chain arithmetic.
 - **OP_AND, OP_OR, OP_XOR, OP_INVERT** are live. Bitwise computation.
 - **OP_SUBSTR, OP_LEFT, OP_RIGHT** are live. String manipulation.
-- **OP_CHECKMULTISIG** is standard. Bare m-of-n multisig relays and confirms.
+- **OP_CHECKMULTISIG** is standard. Bare m-of-n multisig relays and confirms. Full wallet support: `createmultisig`, `addmultisigaddress`, partial signing workflows.
+- **All sighash types** work. ALL, NONE, SINGLE, each with ANYONECANPAY modifier. Enables crowdfunding, blank checks, modular transaction assembly.
 - **OP_RETURN** is provably unspendable (the original was bugged). Safe for data embedding.
 - Any well-formed script up to 10KB is standard and relayable.
+- **Raw transaction tooling.** `createrawtransaction`, `signrawtransaction`, `decoderawtransaction`, `decodescript` -- full manual transaction construction with multisig and multi-party signing support.
+- **Script analysis and testing.** `analyzescript` reports opcode usage, sigop count, limit compliance, and category breakdown. `validatescript` runs scripts in a sandbox with test inputs -- verify your script logic works before committing coins.
 
 Signatures are strict DER with low-S enforcement. Scripts use separated evaluation (scriptSig cannot manipulate scriptPubKey). Minimal push encoding eliminates malleability.
 
-See [SCRIPT_EXEC.md](SCRIPT_EXEC.md) for the full technical specification.
+See [SCRIPT_EXEC.md](SCRIPT_EXEC.md) for the full technical specification. See [RAW_TRANSACTIONS.md](RAW_TRANSACTIONS.md) for raw transaction and multisig workflows. See [SCRIPT_TEMPLATES.md](SCRIPT_TEMPLATES.md) for script analysis and testing tools.
 
 ## Fee Policy
 
@@ -253,6 +256,8 @@ Manual peer addition:
 
 ### API
 - [RPC_API.md](RPC_API.md) -- Complete JSON-RPC reference
+- [RAW_TRANSACTIONS.md](RAW_TRANSACTIONS.md) -- Raw transactions, multisig, and signing workflows
+- [SCRIPT_TEMPLATES.md](SCRIPT_TEMPLATES.md) -- Script analysis and sandbox testing
 - [RPC_MINING_IMPLEMENTATION.md](RPC_MINING_IMPLEMENTATION.md) -- Mining RPC internals
 
 ### Building

@@ -287,22 +287,139 @@ bitokd decodescript "76a91489abcdefabbaabbaabbaabbaabbaabbaabbaabba88ac"
 bitokd decodescript "5221<key1>21<key2>21<key3>53ae"
 ```
 
+### 4. Multisig workflow
+
+```bash
+# Generate a 2-of-3 multisig script from three public keys
+bitokd createmultisig 2 '["03aab...","02bbc...","03ccd..."]'
+# Returns: { "asm": "2 03aab... 02bbc... 03ccd... 3 OP_CHECKMULTISIG", "hex": "5221...", ... }
+
+# Use the hex as an output in createrawtransaction
+SCRIPT_HEX="5221..."
+RAW=$(bitokd createrawtransaction \
+  '[{"txid":"abc...","vout":0}]' \
+  '{"'"$SCRIPT_HEX"'":1.0}')
+
+# Sign with first key
+PARTIAL=$(bitokd signrawtransaction "$RAW" '[]' '["5Hue...first_WIF"]')
+# Returns: { "hex": "...", "complete": false }
+
+# Pass to second signer - signatures are preserved and merged
+SIGNED=$(bitokd signrawtransaction "<partial_hex>" '[]' '["5Kb8...second_WIF"]')
+# Returns: { "hex": "...", "complete": true }
+
+# Broadcast
+bitokd sendrawtransaction "<signed_hex>"
+```
+
+### 5. Crowdfunding with SIGHASH_ANYONECANPAY
+
+```bash
+# Each participant signs their input with ANYONECANPAY
+# Their signatures only commit to the shared output, not other inputs
+bitokd signrawtransaction "$RAW" '[]' '["5Hue..."]' 'ALL|ANYONECANPAY'
+
+# Coordinator assembles all signed inputs into one transaction
+```
+
+### 6. Add multisig to wallet tracking
+
+```bash
+# If you have the keys in your wallet, resolve addresses to pubkeys automatically
+bitokd addmultisigaddress 2 '["1A1zP1...","1B2cD3...","03ccd..."]' "shared fund"
+
+# The wallet will detect incoming payments to this multisig if you hold enough keys
+```
+
+---
+
+## Multisig Commands
+
+### createmultisig
+
+Generates a bare multisig scriptPubKey without touching the wallet.
+
+```
+createmultisig <nrequired> ["pubkey1","pubkey2",...]
+```
+
+**Parameters:**
+
+| # | Name | Type | Description |
+|---|------|------|-------------|
+| 1 | nrequired | int | Number of signatures required to spend (1 to n) |
+| 2 | keys | array | Hex-encoded public keys (compressed 33-byte or uncompressed 65-byte) |
+
+**Returns:**
+```json
+{
+  "asm": "2 03aab... 02bbc... 03ccd... 3 OP_CHECKMULTISIG",
+  "hex": "522103aab...2102bbc...2103ccd...53ae",
+  "type": "2-of-3",
+  "reqSigs": 2,
+  "addresses": ["1A1zP1...", "1B2cD3...", "1C3eF4..."]
+}
+```
+
+The `hex` field can be used directly as an output key in `createrawtransaction`.
+
+### addmultisigaddress
+
+Like `createmultisig` but adds the script to the wallet for payment tracking.
+
+```
+addmultisigaddress <nrequired> ["key",...] [label]
+```
+
+Each key can be a hex public key or a Bitok address. Addresses are resolved to public keys via wallet lookup (the key must be in the wallet).
+
+---
+
+## Sighash Types
+
+The `signrawtransaction` command now accepts an optional fourth parameter specifying the signature hash type:
+
+| Type | Description |
+|------|-------------|
+| `ALL` | Signs all inputs and outputs (default) |
+| `NONE` | Signs all inputs, no outputs (blank check) |
+| `SINGLE` | Signs all inputs, only the output at the same index |
+| `ALL\|ANYONECANPAY` | Signs only this input, all outputs (crowdfunding) |
+| `NONE\|ANYONECANPAY` | Signs only this input, no outputs |
+| `SINGLE\|ANYONECANPAY` | Signs only this input and matching output |
+
+Usage:
+```bash
+bitokd signrawtransaction "<hex>" '[]' '["<privkey>"]' 'ALL|ANYONECANPAY'
+```
+
+---
+
 ## Implementation Notes
 
 - All hex output uses compact format (no spaces between bytes).
-- `signrawtransaction` saves and restores the original scriptSig when signing fails, making it safe for incremental multi-party signing.
+- `signrawtransaction` preserves partial multisig signatures across signing rounds. Each signer adds their signature and passes the partially-signed hex to the next signer.
+- Multisig signatures are matched to pubkeys by verification, maintaining correct ordering for `OP_CHECKMULTISIG`.
 - The `prevout.n` index is validated against a safety bound (100,000) to prevent integer overflow when constructing internal signing structures.
 - Script classification in `ClassifyScript` handles compressed (33-byte) and uncompressed (65-byte) public keys for both P2PK detection and signing.
-- Wallet key signing delegates to the existing `SignSignature` / `Solver` path. Provided-key signing uses direct `SignatureHash` + `CKey::Sign` for P2PKH and P2PK.
+- `Solver()` in `script.cpp` now recognizes three script templates: P2PK, P2PKH, and bare multisig. `IsMine()` returns true for multisig outputs where the wallet holds at least `m` of `n` keys.
+- Wallet key signing delegates to the existing `SignSignature` / `Solver` path. Provided-key signing uses direct `SignatureHash` + `CKey::Sign` for P2PKH, P2PK, and multisig.
 
 ## Helper Functions
 
-Two internal helper functions support the RPCs:
+Internal helper functions supporting the RPCs:
 
 - **`ClassifyScript`** (`rpc.cpp`) -- Classifies a scriptPubKey into one of 5 types (pubkeyhash, pubkey, multisig, nulldata, nonstandard). Extracts the required signature count and associated addresses. Used by both `decoderawtransaction` and `decodescript`.
 
 - **`ScriptPubKeyToJSON`** (`rpc.cpp`) -- Converts a scriptPubKey to its full JSON representation (asm, hex, type, reqSigs, addresses). Used by `decoderawtransaction` for each output.
 
+- **`ParseMultisigScript`** (`rpc.cpp`) -- Parses a bare multisig scriptPubKey, extracting the required signature count and ordered public keys. Used by `signrawtransaction` for multisig signing and signature merging.
+
+- **`ParseSighashString`** (`rpc.cpp`) -- Converts a sighash type string ("ALL", "NONE|ANYONECANPAY", etc.) to the corresponding integer flag.
+
+- **`IsValidPubKey`** (`rpc.cpp`) -- Validates a public key byte vector has correct format (33-byte compressed or 65-byte uncompressed with correct prefix).
+
 ## Files Modified
 
-- **`rpc.cpp`** -- Added `ClassifyScript`, `ScriptPubKeyToJSON`, `decoderawtransaction`, `decodescript`, `createrawtransaction`, `signrawtransaction`. Registered in call table. Added CLI parameter type conversions for JSON array/object arguments.
+- **`rpc.cpp`** -- Added `ClassifyScript`, `ScriptPubKeyToJSON`, `decoderawtransaction`, `decodescript`, `createrawtransaction`, `signrawtransaction`, `createmultisig`, `addmultisigaddress`, `ParseMultisigScript`, `ParseSighashString`, `IsValidPubKey`. Registered in call table. Added CLI parameter type conversions for JSON array/object arguments. Extended `signrawtransaction` with multisig support, partial signing, sighash type parameter.
+- **`script.cpp`** -- Extended `Solver()` with bare multisig template recognition. The signing `Solver()` overload constructs `OP_0 <sig1> ... <sigm>` scriptSig for multisig. `IsMine()` now detects multisig ownership when wallet holds sufficient keys.

@@ -1162,6 +1162,46 @@ bool Solver(const CScript& scriptPubKey, vector<pair<opcodetype, valtype> >& vSo
     }
 
     vSolutionRet.clear();
+
+    {
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        valtype vchData;
+
+        if (scriptPubKey.GetOp(pc, opcode) && opcode >= OP_1 && opcode <= OP_16)
+        {
+            int nRequired = (int)opcode - (int)(OP_1 - 1);
+            vector<valtype> vPubKeys;
+
+            while (scriptPubKey.GetOp(pc, opcode, vchData))
+            {
+                if (opcode >= OP_1 && opcode <= OP_16)
+                {
+                    int nKeys = (int)opcode - (int)(OP_1 - 1);
+                    opcodetype opcodeCheck;
+                    if (scriptPubKey.GetOp(pc, opcodeCheck) &&
+                        opcodeCheck == OP_CHECKMULTISIG &&
+                        pc == scriptPubKey.end() &&
+                        (int)vPubKeys.size() == nKeys &&
+                        nRequired >= 1 && nRequired <= nKeys)
+                    {
+                        CBigNum bnM(nRequired);
+                        vSolutionRet.push_back(make_pair(OP_CHECKMULTISIG, bnM.getvch()));
+                        for (int i = 0; i < (int)vPubKeys.size(); i++)
+                            vSolutionRet.push_back(make_pair(OP_PUBKEY, vPubKeys[i]));
+                        return true;
+                    }
+                    break;
+                }
+                if (vchData.size() == 33 || vchData.size() == 65)
+                    vPubKeys.push_back(vchData);
+                else
+                    break;
+            }
+        }
+    }
+
+    vSolutionRet.clear();
     return false;
 }
 
@@ -1176,6 +1216,38 @@ bool Solver(const CScript& scriptPubKey, uint256 hash, int nHashType, CScript& s
 
     CRITICAL_BLOCK(cs_mapKeys)
     {
+        if (!vSolution.empty() && vSolution[0].first == OP_CHECKMULTISIG)
+        {
+            int nRequired = CBigNum(vSolution[0].second).getint();
+            int nSigned = 0;
+
+            scriptSigRet << OP_0;
+
+            for (int i = 1; i < (int)vSolution.size(); i++)
+            {
+                if (vSolution[i].first != OP_PUBKEY)
+                    continue;
+
+                const valtype& vchPubKey = vSolution[i].second;
+                if (!mapKeys.count(vchPubKey))
+                    continue;
+
+                if (hash != 0)
+                {
+                    vector<unsigned char> vchSig;
+                    if (!CKey::Sign(mapKeys[vchPubKey], hash, vchSig))
+                        continue;
+                    vchSig.push_back((unsigned char)nHashType);
+                    scriptSigRet << vchSig;
+                }
+                nSigned++;
+                if (nSigned >= nRequired)
+                    break;
+            }
+
+            return (nSigned >= nRequired);
+        }
+
         foreach(PAIRTYPE(opcodetype, valtype)& item, vSolution)
         {
             if (item.first == OP_PUBKEY)
