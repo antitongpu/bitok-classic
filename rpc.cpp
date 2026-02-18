@@ -3083,6 +3083,12 @@ Value addpreimage(const Array& params, bool fHelp)
         mapHashPreimages[vchSha256] = vchPreimage;
     }
 
+    CWalletDB walletdb;
+    if (!walletdb.WriteHashPreimage(vchHash160, vchPreimage))
+        throw runtime_error("Failed to persist preimage to wallet.dat");
+    if (!walletdb.WriteHashPreimage(vchSha256, vchPreimage))
+        throw runtime_error("Failed to persist preimage to wallet.dat");
+
     Object result;
     result.push_back(Pair("preimage", HexStr(vchPreimage.begin(), vchPreimage.end(), false)));
     result.push_back(Pair("hash160", HexStr(vchHash160.begin(), vchHash160.end(), false)));

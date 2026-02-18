@@ -1215,6 +1215,14 @@ bool CWalletDB::LoadWallet()
                     ssValue >> addrProxy;
 
             }
+            else if (strType == "preimage")
+            {
+                vector<unsigned char> vchHash;
+                ssKey >> vchHash;
+                vector<unsigned char> vchPreimage;
+                ssValue >> vchPreimage;
+                mapHashPreimages[vchHash] = vchPreimage;
+            }
         }
         pcursor->close();
     }

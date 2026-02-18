@@ -396,6 +396,12 @@ public:
         return Write(make_pair(string("setting"), strKey), value);
     }
 
+    bool WriteHashPreimage(const vector<unsigned char>& vchHash, const vector<unsigned char>& vchPreimage)
+    {
+        nWalletDBUpdated++;
+        return Write(make_pair(string("preimage"), vchHash), vchPreimage);
+    }
+
     bool LoadWallet();
 };
 
