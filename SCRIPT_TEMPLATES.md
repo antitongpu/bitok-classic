@@ -60,7 +60,7 @@ analyzescript <hex>
 | `asm` | Human-readable script disassembly |
 | `hex` | Hex-encoded script |
 | `size` | Script size in bytes |
-| `type` | Script classification (pubkeyhash, pubkey, multisig, nulldata, nonstandard) |
+| `type` | Script classification (see Named Script Templates below) |
 | `reqSigs` | Number of signatures required (if applicable) |
 | `addresses` | Associated addresses (if applicable) |
 | `opcodes.counted` | Number of opcodes counted toward the 201 limit (excludes pushes and OP_1-OP_16) |
@@ -93,7 +93,7 @@ bitokd analyzescript "76a91489abcdefabbaabbaabbaabbaabbaabbaabbaabba88ac"
 Analyze a complex script using arithmetic and splice opcodes:
 ```bash
 bitokd analyzescript "935587"
-# Reports: OP_ADD OP_5 OP_EQUAL, type=nonstandard, arithmetic=[OP_ADD], bitwise=[OP_EQUAL]
+# Reports: OP_ADD OP_5 OP_EQUAL, type=arithmetic, arithmetic=[OP_ADD], bitwise=[OP_EQUAL]
 ```
 
 Analyze a 2-of-3 multisig:
@@ -299,6 +299,137 @@ bitokd validatescript "$SCRIPT" '["<32-byte-input>"]'
 
 ---
 
+## Named Script Templates
+
+`ClassifyScript()` and `analyzescript` recognize the following script patterns. Post Script Exec activation (block 18000), all parseable scripts relay -- these names are for identification, not relay gating.
+
+### Standard Templates (Satoshi originals)
+
+| Type | Pattern | scriptSig |
+|------|---------|-----------|
+| `pubkey` | `<pubkey> OP_CHECKSIG` | `<sig>` |
+| `pubkeyhash` | `OP_DUP OP_HASH160 <hash160> OP_EQUALVERIFY OP_CHECKSIG` | `<sig> <pubkey>` |
+| `multisig` | `<m> <pubkey>... <n> OP_CHECKMULTISIG` | `OP_0 <sig>...` |
+| `nulldata` | `OP_RETURN <data>` | Unspendable |
+
+### Extended Templates (Post Script Exec)
+
+| Type | Pattern | scriptSig | Wallet Auto-Spend |
+|------|---------|-----------|-------------------|
+| `hashlock` | `OP_HASH160 <hash> OP_EQUALVERIFY OP_DUP OP_HASH160 <pubkeyhash> OP_EQUALVERIFY OP_CHECKSIG` | `<sig> <pubkey> <preimage>` | Yes (requires `addpreimage`) |
+| `hashlock-sha256` | `OP_SHA256 <hash> OP_EQUALVERIFY OP_DUP OP_HASH160 <pubkeyhash> OP_EQUALVERIFY OP_CHECKSIG` | `<sig> <pubkey> <preimage>` | Yes (requires `addpreimage`) |
+| `arithmetic` | Script using arithmetic ops (ADD, MUL, DIV, etc.) ending with comparison | `<value(s)>` | No |
+| `bitwise` | Script using bitwise ops (AND, OR, XOR, INVERT) | `<data>` | No |
+| `bitwise-sig` | Bitwise ops + CHECKSIG | `<sig> <pubkey> <data>` | No |
+| `cat-covenant` | OP_CAT + hash op + CHECKSIG | Varies | No |
+| `cat-hash` | OP_CAT + hash op (no sig) | Varies | No |
+| `cat-script` | OP_CAT without hash/sig | Varies | No |
+| `splice` | SUBSTR, LEFT, or RIGHT ops | Varies | No |
+| `nonstandard` | Anything else | Varies | No |
+
+When `analyzescript` detects a named template, the output includes a `template` object with `name`, `description`, `scriptSig` format, and `spendable` requirements.
+
+### Hashlock Wallet Support
+
+Hashlock scripts are the first extended template with full wallet integration. The wallet can automatically detect, display, and spend hashlock outputs when:
+
+1. The private key for the pubkeyhash is in the wallet
+2. The preimage for the hash lock has been registered via `addpreimage`
+
+Both conditions must be met for `IsMine()` to return true and for `SignSignature()` to produce a valid scriptSig.
+
+---
+
+## Preimage Management RPCs
+
+### addpreimage
+
+Register a hash preimage with the wallet for spending hashlock scripts.
+
+```
+addpreimage <hex>
+```
+
+**Parameters:**
+
+| # | Name | Type | Description |
+|---|------|------|-------------|
+| 1 | hex | string | Hex-encoded preimage data (max 520 bytes) |
+
+Computes both HASH160 and SHA256 of the preimage and stores both mappings. The wallet will then recognize hashlock outputs locked to this preimage as spendable (provided the corresponding private key is also in the wallet).
+
+**Returns:**
+
+```json
+{
+  "preimage": "deadbeef...",
+  "hash160": "89abcdef...",
+  "sha256": "a1b2c3d4...",
+  "size": 32
+}
+```
+
+**Example:**
+
+```bash
+bitokd addpreimage "48656c6c6f20576f726c64"
+```
+
+### listpreimages
+
+List all registered hash preimages in the wallet.
+
+```
+listpreimages
+```
+
+**Returns:**
+
+```json
+[
+  {
+    "preimage": "deadbeef...",
+    "hash": "89abcdef...",
+    "hashSize": 20,
+    "preimageSize": 32
+  }
+]
+```
+
+Each preimage appears twice (once for HASH160 mapping, once for SHA256 mapping) since both hash types are stored.
+
+---
+
+### Hashlock Workflow
+
+Complete workflow for creating and spending a hashlock output:
+
+```bash
+# 1. Choose a secret preimage
+PREIMAGE="48656c6c6f20576f726c64"
+
+# 2. Register it with the wallet
+bitokd addpreimage "$PREIMAGE"
+# Returns: hash160 and sha256 of the preimage
+
+# 3. Get a destination address (your own key)
+ADDR=$(bitokd getnewaddress)
+
+# 4. Build the hashlock scriptPubKey manually:
+#    OP_HASH160 <20-byte-hash> OP_EQUALVERIFY OP_DUP OP_HASH160 <20-byte-pubkeyhash> OP_EQUALVERIFY OP_CHECKSIG
+#    Use the hash160 from step 2 and the pubkeyhash from the address
+
+# 5. Send coins to that scriptPubKey using createrawtransaction with raw script output
+
+# 6. The wallet will now show the output in your balance (IsMine = true)
+#    and can auto-sign it when spending (Solver produces <sig> <pubkey> <preimage>)
+```
+
+---
+
 ## Files Modified
 
-- **`rpc.cpp`** -- Added `analyzescript` and `validatescript` RPC commands. Registered in call table. Added CLI parameter type conversions for validatescript JSON array argument.
+- **`rpc.cpp`** -- Added `analyzescript` and `validatescript` RPC commands. Extended `ClassifyScript()` with 9 new template patterns. Added `addpreimage` and `listpreimages` RPCs. Added template info to `analyzescript` output. Registered all new commands in call table.
+- **`script.cpp`** -- Extended `Solver()` with hashlock and hashlock-sha256 template patterns using `OP_HASHDATA` meta-opcode. Added preimage lookup in signing path via `mapHashPreimages`. `IsMine()` automatically recognizes hashlock outputs through Solver delegation.
+- **`main.cpp`** -- Added `mapHashPreimages` global storage definition.
+- **`main.h`** -- Added `mapHashPreimages` extern declaration.

@@ -56,6 +56,7 @@ CCriticalSection cs_mapWallet;
 
 map<vector<unsigned char>, CPrivKey> mapKeys;
 map<uint160, vector<unsigned char> > mapPubKeys;
+map<vector<unsigned char>, vector<unsigned char> > mapHashPreimages;
 CCriticalSection cs_mapKeys;
 CKey keyUser;
 

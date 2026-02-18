@@ -1866,6 +1866,152 @@ static string ClassifyScript(const CScript& scriptPubKey, int& nRequiredRet, Arr
     if (scriptPubKey.size() > 0 && scriptPubKey[0] == OP_RETURN)
         return "nulldata";
 
+    do {
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        vector<unsigned char> vchData;
+
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_HASH160)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode, vchData) || vchData.size() != 20)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_EQUALVERIFY)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_DUP)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_HASH160)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode, vchData) || vchData.size() != 20)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_EQUALVERIFY)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_CHECKSIG)
+            break;
+        if (pc != scriptPubKey.end())
+            break;
+
+        nRequiredRet = 1;
+        addressesRet.push_back(Hash160ToAddress(uint160(vchData)));
+        return "hashlock";
+    } while (false);
+
+    do {
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        vector<unsigned char> vchData;
+
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_SHA256)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode, vchData) || vchData.size() != 32)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_EQUALVERIFY)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_DUP)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_HASH160)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode, vchData) || vchData.size() != 20)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_EQUALVERIFY)
+            break;
+        if (!scriptPubKey.GetOp(pc, opcode) || opcode != OP_CHECKSIG)
+            break;
+        if (pc != scriptPubKey.end())
+            break;
+
+        nRequiredRet = 1;
+        addressesRet.push_back(Hash160ToAddress(uint160(vchData)));
+        return "hashlock-sha256";
+    } while (false);
+
+    do {
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        vector<unsigned char> vchData;
+
+        bool hasArith = false;
+        int depth = 0;
+        while (scriptPubKey.GetOp(pc, opcode, vchData))
+        {
+            depth++;
+            if (opcode == OP_ADD || opcode == OP_SUB || opcode == OP_MUL ||
+                opcode == OP_DIV || opcode == OP_MOD ||
+                opcode == OP_LSHIFT || opcode == OP_RSHIFT ||
+                opcode == OP_2MUL || opcode == OP_2DIV ||
+                opcode == OP_1ADD || opcode == OP_1SUB)
+                hasArith = true;
+        }
+        if (!hasArith || depth < 2)
+            break;
+
+        return "arithmetic";
+    } while (false);
+
+    do {
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        vector<unsigned char> vchData;
+
+        bool hasBitwise = false;
+        bool hasChecksig = false;
+        while (scriptPubKey.GetOp(pc, opcode, vchData))
+        {
+            if (opcode == OP_AND || opcode == OP_OR || opcode == OP_XOR || opcode == OP_INVERT)
+                hasBitwise = true;
+            if (opcode == OP_CHECKSIG || opcode == OP_CHECKSIGVERIFY)
+                hasChecksig = true;
+        }
+        if (!hasBitwise)
+            break;
+
+        if (hasChecksig)
+            return "bitwise-sig";
+        return "bitwise";
+    } while (false);
+
+    do {
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        vector<unsigned char> vchData;
+
+        bool hasCat = false;
+        bool hasHash = false;
+        bool hasChecksig = false;
+        while (scriptPubKey.GetOp(pc, opcode, vchData))
+        {
+            if (opcode == OP_CAT)
+                hasCat = true;
+            if (opcode == OP_HASH160 || opcode == OP_HASH256 || opcode == OP_SHA256)
+                hasHash = true;
+            if (opcode == OP_CHECKSIG || opcode == OP_CHECKSIGVERIFY)
+                hasChecksig = true;
+        }
+        if (!hasCat)
+            break;
+
+        if (hasHash && hasChecksig)
+            return "cat-covenant";
+        if (hasHash)
+            return "cat-hash";
+        return "cat-script";
+    } while (false);
+
+    do {
+        CScript::const_iterator pc = scriptPubKey.begin();
+        opcodetype opcode;
+        vector<unsigned char> vchData;
+
+        bool hasSplice = false;
+        while (scriptPubKey.GetOp(pc, opcode, vchData))
+        {
+            if (opcode == OP_SUBSTR || opcode == OP_LEFT || opcode == OP_RIGHT)
+                hasSplice = true;
+        }
+        if (!hasSplice)
+            break;
+        return "splice";
+    } while (false);
+
     return "nonstandard";
 }
 
@@ -2610,6 +2756,65 @@ Value analyzescript(const Array& params, bool fHelp)
     if (addresses.size() > 0)
         result.push_back(Pair("addresses", addresses));
 
+    if (strType == "hashlock" || strType == "hashlock-sha256")
+    {
+        Object tmpl;
+        tmpl.push_back(Pair("name", strType));
+        tmpl.push_back(Pair("description", strType == "hashlock"
+            ? "HASH160 preimage lock + P2PKH signature"
+            : "SHA256 preimage lock + P2PKH signature"));
+        tmpl.push_back(Pair("scriptSig", "<sig> <pubkey> <preimage>"));
+        tmpl.push_back(Pair("spendable", "Requires preimage + private key"));
+        result.push_back(Pair("template", tmpl));
+    }
+    else if (strType == "arithmetic")
+    {
+        Object tmpl;
+        tmpl.push_back(Pair("name", "arithmetic"));
+        tmpl.push_back(Pair("description", "Arithmetic condition gate"));
+        tmpl.push_back(Pair("scriptSig", "<value(s) satisfying arithmetic condition>"));
+        tmpl.push_back(Pair("spendable", "Requires numeric solution"));
+        result.push_back(Pair("template", tmpl));
+    }
+    else if (strType == "bitwise" || strType == "bitwise-sig")
+    {
+        Object tmpl;
+        tmpl.push_back(Pair("name", strType));
+        tmpl.push_back(Pair("description", strType == "bitwise-sig"
+            ? "Bitwise condition + signature"
+            : "Bitwise condition gate"));
+        tmpl.push_back(Pair("scriptSig", strType == "bitwise-sig"
+            ? "<sig> <pubkey> <data matching bitmask>"
+            : "<data matching bitmask>"));
+        tmpl.push_back(Pair("spendable", strType == "bitwise-sig"
+            ? "Requires matching data + private key"
+            : "Requires matching data"));
+        result.push_back(Pair("template", tmpl));
+    }
+    else if (strType == "cat-covenant" || strType == "cat-hash" || strType == "cat-script")
+    {
+        Object tmpl;
+        tmpl.push_back(Pair("name", strType));
+        string desc = "OP_CAT ";
+        if (strType == "cat-covenant")
+            desc += "concatenation covenant with hash verification + signature";
+        else if (strType == "cat-hash")
+            desc += "concatenation with hash verification";
+        else
+            desc += "concatenation script";
+        tmpl.push_back(Pair("description", desc));
+        tmpl.push_back(Pair("spendable", "Requires data satisfying concatenation + hash condition"));
+        result.push_back(Pair("template", tmpl));
+    }
+    else if (strType == "splice")
+    {
+        Object tmpl;
+        tmpl.push_back(Pair("name", "splice"));
+        tmpl.push_back(Pair("description", "String manipulation script (SUBSTR/LEFT/RIGHT)"));
+        tmpl.push_back(Pair("spendable", "Requires data satisfying splice condition"));
+        result.push_back(Pair("template", tmpl));
+    }
+
     CScript::const_iterator pc = script.begin();
     opcodetype opcode;
     vector<unsigned char> vchData;
@@ -2851,6 +3056,75 @@ Value validatescript(const Array& params, bool fHelp)
 }
 
 
+Value addpreimage(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "addpreimage <hex>\n"
+            "Register a hash preimage with the wallet for spending hashlock scripts.\n"
+            "Computes HASH160 and SHA256 of the preimage and stores both mappings.\n"
+            "The wallet will then recognize hashlock outputs locked to this preimage as spendable.");
+
+    vector<unsigned char> vchPreimage = ParseHex(params[0].get_str());
+    if (vchPreimage.empty())
+        throw runtime_error("Empty preimage");
+    if (vchPreimage.size() > MAX_SCRIPT_ELEMENT_SIZE)
+        throw runtime_error("Preimage exceeds maximum element size (520 bytes)");
+
+    uint160 hash160 = Hash160(vchPreimage);
+    vector<unsigned char> vchHash160((unsigned char*)&hash160, (unsigned char*)&hash160 + sizeof(hash160));
+
+    vector<unsigned char> vchSha256(32);
+    SHA256(&vchPreimage[0], vchPreimage.size(), &vchSha256[0]);
+
+    CRITICAL_BLOCK(cs_mapKeys)
+    {
+        mapHashPreimages[vchHash160] = vchPreimage;
+        mapHashPreimages[vchSha256] = vchPreimage;
+    }
+
+    Object result;
+    result.push_back(Pair("preimage", HexStr(vchPreimage.begin(), vchPreimage.end(), false)));
+    result.push_back(Pair("hash160", HexStr(vchHash160.begin(), vchHash160.end(), false)));
+    result.push_back(Pair("sha256", HexStr(vchSha256.begin(), vchSha256.end(), false)));
+    result.push_back(Pair("size", (int)vchPreimage.size()));
+    return result;
+}
+
+
+Value listpreimages(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() > 0)
+        throw runtime_error(
+            "listpreimages\n"
+            "List all registered hash preimages in the wallet.");
+
+    Array result;
+    map<string, bool> seen;
+
+    CRITICAL_BLOCK(cs_mapKeys)
+    {
+        for (map<vector<unsigned char>, vector<unsigned char> >::iterator it = mapHashPreimages.begin();
+             it != mapHashPreimages.end(); ++it)
+        {
+            string preimageHex = HexStr(it->second.begin(), it->second.end(), false);
+            if (seen.count(preimageHex))
+                continue;
+            seen[preimageHex] = true;
+
+            Object entry;
+            entry.push_back(Pair("preimage", preimageHex));
+            entry.push_back(Pair("hash", HexStr(it->first.begin(), it->first.end(), false)));
+            entry.push_back(Pair("hashSize", (int)it->first.size()));
+            entry.push_back(Pair("preimageSize", (int)it->second.size()));
+            result.push_back(entry);
+        }
+    }
+
+    return result;
+}
+
+
 //
 // Call Table
 //
@@ -2907,6 +3181,8 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("addmultisigaddress",    &addmultisigaddress),
     make_pair("analyzescript",         &analyzescript),
     make_pair("validatescript",        &validatescript),
+    make_pair("addpreimage",           &addpreimage),
+    make_pair("listpreimages",         &listpreimages),
 };
 map<string, rpcfn_type> mapCallTable(pCallTable, pCallTable + sizeof(pCallTable)/sizeof(pCallTable[0]));
 

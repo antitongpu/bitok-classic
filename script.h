@@ -190,6 +190,7 @@ enum opcodetype
     // template matching params
     OP_PUBKEY,
     OP_PUBKEYHASH,
+    OP_HASHDATA,
 
 
 

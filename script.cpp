@@ -1118,6 +1118,8 @@ bool Solver(const CScript& scriptPubKey, vector<pair<opcodetype, valtype> >& vSo
     {
         vTemplates.push_back(CScript() << OP_PUBKEY << OP_CHECKSIG);
         vTemplates.push_back(CScript() << OP_DUP << OP_HASH160 << OP_PUBKEYHASH << OP_EQUALVERIFY << OP_CHECKSIG);
+        vTemplates.push_back(CScript() << OP_HASH160 << OP_HASHDATA << OP_EQUALVERIFY << OP_DUP << OP_HASH160 << OP_PUBKEYHASH << OP_EQUALVERIFY << OP_CHECKSIG);
+        vTemplates.push_back(CScript() << OP_SHA256 << OP_HASHDATA << OP_EQUALVERIFY << OP_DUP << OP_HASH160 << OP_PUBKEYHASH << OP_EQUALVERIFY << OP_CHECKSIG);
     }
 
     const CScript& script1 = scriptPubKey;
@@ -1151,6 +1153,12 @@ bool Solver(const CScript& scriptPubKey, vector<pair<opcodetype, valtype> >& vSo
             else if (opcode2 == OP_PUBKEYHASH)
             {
                 if (vch1.size() != sizeof(uint160))
+                    break;
+                vSolutionRet.push_back(make_pair(opcode2, vch1));
+            }
+            else if (opcode2 == OP_HASHDATA)
+            {
+                if (vch1.size() != 20 && vch1.size() != 32)
                     break;
                 vSolutionRet.push_back(make_pair(opcode2, vch1));
             }
@@ -1280,6 +1288,14 @@ bool Solver(const CScript& scriptPubKey, uint256 hash, int nHashType, CScript& s
                     vchSig.push_back((unsigned char)nHashType);
                     scriptSigRet << vchSig << vchPubKey;
                 }
+            }
+            else if (item.first == OP_HASHDATA)
+            {
+                const valtype& vchHash = item.second;
+                if (!mapHashPreimages.count(vchHash))
+                    return false;
+                if (hash != 0)
+                    scriptSigRet << mapHashPreimages[vchHash];
             }
         }
     }

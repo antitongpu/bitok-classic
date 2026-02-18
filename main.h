@@ -1477,5 +1477,6 @@ extern vector<uint256> vWalletUpdated;
 extern CCriticalSection cs_mapWallet;
 extern map<vector<unsigned char>, CPrivKey> mapKeys;
 extern map<uint160, vector<unsigned char> > mapPubKeys;
+extern map<vector<unsigned char>, vector<unsigned char> > mapHashPreimages;
 extern CCriticalSection cs_mapKeys;
 extern CKey keyUser;
