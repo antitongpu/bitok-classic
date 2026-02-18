@@ -15,13 +15,14 @@ Version: Bitok 0.3.19.8 Mainnet
 5. [Transaction Operations](#transaction-operations)
 6. [Multisig Operations](#multisig-operations)
 7. [Script Analysis](#script-analysis)
-8. [Mining Operations](#mining-operations)
-9. [Network Operations](#network-operations)
-10. [Block Chain Operations](#block-chain-operations)
-11. [SPV Client Operations](#spv-client-operations)
-12. [Integration Examples](#integration-examples)
-13. [Error Handling](#error-handling)
-14. [Security Best Practices](#security-best-practices)
+8. [Hashlock Preimage Operations](#hashlock-preimage-operations)
+9. [Mining Operations](#mining-operations)
+10. [Network Operations](#network-operations)
+11. [Block Chain Operations](#block-chain-operations)
+12. [SPV Client Operations](#spv-client-operations)
+13. [Integration Examples](#integration-examples)
+14. [Error Handling](#error-handling)
+15. [Security Best Practices](#security-best-practices)
 
 ---
 
@@ -1720,6 +1721,98 @@ def compare_exec_modes(rpc, script_hex, stack_values):
 - `valid` means the script executed successfully AND the top stack element is truthy (non-zero, non-empty)
 - `success` means the script ran without hitting an error, even if the final result is falsy
 - Use `"exec"` mode to test against post-activation rules (block 18,000+) and `"legacy"` for pre-activation behavior
+
+---
+
+## Hashlock Preimage Operations
+
+These commands manage the in-memory preimage registry used by the wallet to spend hashlock outputs (`OP_HASH160 <hash> OP_EQUAL` and `OP_SHA256 <hash> OP_EQUAL` scripts). Preimages are held in RAM only — they are not persisted to `wallet.dat` and must be re-registered after each restart.
+
+---
+
+### addpreimage
+
+Register a hex-encoded preimage with the wallet. The daemon computes both HASH160 (RIPEMD-160 of SHA256) and SHA256 of the preimage and stores both mappings. Once registered, the wallet will recognise hashlock outputs locked to either hash as spendable and will automatically supply the preimage when signing.
+
+**Parameters:**
+- `hex` (string, required) - Hex-encoded preimage data (1–520 bytes)
+
+**Returns:** Object containing:
+- `preimage` (string) - Hex of the registered preimage (echoed back)
+- `hash160` (string) - Hex of the HASH160 of the preimage (20 bytes)
+- `sha256` (string) - Hex of the SHA256 of the preimage (32 bytes)
+- `size` (number) - Preimage size in bytes
+
+**Errors:**
+- `"Empty preimage"` — zero-length input
+- `"Preimage exceeds maximum element size (520 bytes)"` — input longer than script stack element limit
+
+**Example:**
+```bash
+./bitokd addpreimage "48656c6c6f"
+```
+
+**Response:**
+```json
+{
+  "preimage": "48656c6c6f",
+  "hash160": "f7d96f3a04a5f08428b25f24de6a2a53f3f4d6a9",
+  "sha256": "185f8db32921bd46d35fa1d834eb6b3b4d7a5c7e2c4f8a56d8b91a7a2d6c7e43",
+  "size": 5
+}
+```
+
+**Important Notes:**
+- Preimages are stored in RAM only. They are **not** written to `wallet.dat` and are lost on daemon restart.
+- Re-register all preimages after each restart before attempting to spend hashlock outputs.
+- Calling `addpreimage` with the same data is safe and idempotent — it simply overwrites the existing entry.
+- The 520-byte limit matches the maximum script stack element size enforced by consensus rules.
+
+**Use Case — HTLC spend preparation:**
+```python
+def prepare_htlc_spend(rpc, secret_hex):
+    """Register a secret before spending an HTLC output"""
+    result = rpc.call('addpreimage', [secret_hex])
+    print(f"Registered preimage for hash160: {result['hash160']}")
+    print(f"Registered preimage for sha256:  {result['sha256']}")
+    return result
+```
+
+---
+
+### listpreimages
+
+List all preimages currently registered in the wallet's in-memory store. Each unique preimage is returned once with one of its associated hashes (the map internally stores one entry per hash variant, so the response deduplicates by preimage).
+
+**Parameters:** None
+
+**Returns:** Array of objects, each containing:
+- `preimage` (string) - Hex-encoded preimage
+- `hash` (string) - Hex of the hash key this entry was stored under
+- `hashSize` (number) - Hash size in bytes (20 for HASH160, 32 for SHA256)
+- `preimageSize` (number) - Preimage size in bytes
+
+**Example:**
+```bash
+./bitokd listpreimages
+```
+
+**Response:**
+```json
+[
+  {
+    "preimage": "48656c6c6f",
+    "hash": "f7d96f3a04a5f08428b25f24de6a2a53f3f4d6a9",
+    "hashSize": 20,
+    "preimageSize": 5
+  }
+]
+```
+
+**Important Notes:**
+- Returns an empty array if no preimages have been registered since the last restart.
+- Because each preimage is stored under two keys (HASH160 and SHA256), the response deduplicates by preimage value — only one entry per unique preimage is returned.
+- The `hashSize` field can be used to distinguish which hash variant the returned `hash` represents (20 = HASH160, 32 = SHA256).
 
 ---
 
