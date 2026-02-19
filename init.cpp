@@ -405,12 +405,16 @@ bool CMyApp::OnInit2()
     if (fDebug)
         fPrintToConsole = true;
 
+    fCORS = GetBoolArg("-cors");
+
     fPrintToDebugger = GetBoolArg("-printtodebugger");
     if (!fDebug && !pszSetDataDir[0])
         ShrinkDebugFile();
     printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
     printf("Bitok version %d.%d.%d%s\n", VERSION/10000, (VERSION/100)%100, VERSION%100, pszSubVer);
     printf("Debug mode: %s\n", fDebug ? "ON" : "OFF");
+    if (fCORS)
+        printf("CORS: enabled\n");
     printf("System default language is %d\n", m_locale.GetSystemLanguage());
     printf("Language file loading...\n");
 
@@ -872,6 +876,8 @@ bool AppInit(int argc, char* argv[])
     if (fDebug)
         fPrintToConsole = true;
 
+    fCORS = GetBoolArg("-cors");
+
     fPrintToDebugger = GetBoolArg("-printtodebugger");
 
     if (!fDebug && !pszSetDataDir[0])
@@ -880,6 +886,8 @@ bool AppInit(int argc, char* argv[])
     printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
     printf("Bitok version %d.%d.%d%s\n", VERSION/10000, (VERSION/100)%100, VERSION%100, pszSubVer);
     printf("Debug mode: %s\n", fDebug ? "ON" : "OFF");
+    if (fCORS)
+        printf("CORS: enabled\n");
 
     if (GetBoolArg("-loadblockindextest"))
     {

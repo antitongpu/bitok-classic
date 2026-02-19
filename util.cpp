@@ -10,6 +10,7 @@ map<string, vector<string> > mapMultiArgs;
 bool fDebug = false;
 bool fPrintToConsole = false;
 bool fPrintToDebugger = false;
+bool fCORS = false;
 char pszSetDataDir[MAX_PATH] = "";
 bool fShutdown = false;
 bool fDaemon = false;

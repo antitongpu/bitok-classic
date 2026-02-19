@@ -3230,6 +3230,7 @@ string HTTPReply(const string& strMsg, int nStatus=200)
 {
     string strStatus;
     if (nStatus == 200) strStatus = "OK";
+    if (nStatus == 204) strStatus = "No Content";
     if (nStatus == 401) strStatus = "Unauthorized";
     if (nStatus == 403) strStatus = "Forbidden";
     if (nStatus == 500) strStatus = "Internal Server Error";
@@ -3247,6 +3248,14 @@ string HTTPReply(const string& strMsg, int nStatus=200)
 
     if (nStatus == 401)
         strHeaders += "WWW-Authenticate: Basic realm=\"jsonrpc\"\r\n";
+
+    if (fCORS)
+    {
+        string strCORSOrigin = GetArg("-corsorigin", "*");
+        strHeaders += "Access-Control-Allow-Origin: " + strCORSOrigin + "\r\n";
+        strHeaders += "Access-Control-Allow-Methods: POST, OPTIONS\r\n";
+        strHeaders += "Access-Control-Allow-Headers: Authorization, Content-Type\r\n";
+    }
 
     return strHeaders + "\r\n" + strMsg;
 }
@@ -3347,12 +3356,21 @@ bool ClientAllowed(const string& strAddr)
 int ReadHTTPHeader(tcp::iostream& stream, map<string, string>& mapHeadersRet)
 {
     int nLen = 0;
+    bool fFirstLine = true;
     loop
     {
         string str;
         std::getline(stream, str);
         if (str.empty() || str == "\r")
             break;
+        if (fFirstLine)
+        {
+            fFirstLine = false;
+            string::size_type nSpace = str.find(' ');
+            if (nSpace != string::npos)
+                mapHeadersRet["_method"] = str.substr(0, nSpace);
+            continue;
+        }
         if (str.substr(0,15) == "Content-Length:")
             nLen = atoi(str.substr(15));
         else
@@ -3494,6 +3512,12 @@ void ThreadRPCServer2(void* parg)
 
         map<string, string> mapHeaders;
         string strRequest = ReadHTTP(stream, mapHeaders);
+
+        if (fCORS && mapHeaders["_method"] == "OPTIONS")
+        {
+            stream << HTTPReply("", 204) << std::flush;
+            continue;
+        }
 
         if (!HTTPAuthorized(mapHeaders["Authorization"]))
         {

@@ -118,6 +118,7 @@ extern map<string, vector<string> > mapMultiArgs;
 extern bool fDebug;
 extern bool fPrintToConsole;
 extern bool fPrintToDebugger;
+extern bool fCORS;
 extern char pszSetDataDir[MAX_PATH];
 extern bool fShutdown;
 extern bool fDaemon;

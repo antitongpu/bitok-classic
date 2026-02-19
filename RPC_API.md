@@ -85,6 +85,37 @@ The daemon reads credentials from the config file automatically. No need for com
 3. **Local Only:** By default, RPC binds to 127.0.0.1. Don't change that unless you know what you're doing.
 4. **SSH Tunnel:** For remote access, tunnel through SSH instead of exposing the port.
 
+### CORS (Browser / Web3 Access)
+
+By default the RPC server does not send CORS headers, so browser-based clients (web3 dApps) are blocked by the same-origin policy.
+
+Enable CORS in `bitok.conf`:
+
+```ini
+cors=1
+```
+
+Restrict to a specific origin instead of allowing all:
+
+```ini
+cors=1
+corsorigin=http://localhost:5173
+```
+
+When `cors=1` and no `corsorigin` is set, the server responds with `Access-Control-Allow-Origin: *`. When `corsorigin` is set, only that origin is allowed.
+
+**dApp `.env` example:**
+
+```ini
+VITE_RPC_USER=yourusername
+VITE_RPC_PASS=yourpassword
+VITE_RPC_HOST=your-node-ip-or-domain
+VITE_RPC_PORT=8332
+VITE_RPC_PROTOCOL=http
+```
+
+Use `https` for `VITE_RPC_PROTOCOL` when your node is behind a TLS-terminating reverse proxy.
+
 ### Programmatic Access
 
 #### cURL Example
@@ -3151,7 +3182,18 @@ ssh -L 8332:localhost:8332 user@bitok-server
 
 RPC binds to 127.0.0.1 by default. Keep it that way.
 
-### 3. Hot Wallet Management
+### 3. CORS Configuration
+
+CORS headers are disabled by default. Enable only when you need browser-based access:
+
+```ini
+cors=1
+corsorigin=https://wallet.yourdomain.com
+```
+
+Never set `cors=1` without also setting `corsorigin` on a public-facing node. Leaving `corsorigin` unset allows any browser origin to call your RPC endpoint.
+
+### 4. Hot Wallet Management
 
 **Best Practices:**
 - Keep minimum funds in hot wallet
