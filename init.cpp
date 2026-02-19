@@ -408,6 +408,11 @@ bool CMyApp::OnInit2()
     fCORS = GetBoolArg("-cors");
 
     fPrintToDebugger = GetBoolArg("-printtodebugger");
+
+    fUseIndexer = GetBoolArg("-indexer");
+    if (fUseIndexer)
+        printf("UTXO/address indexer: enabled\n");
+
     if (!fDebug && !pszSetDataDir[0])
         ShrinkDebugFile();
     printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
@@ -515,6 +520,36 @@ bool CMyApp::OnInit2()
     if (!LoadBlockIndex())
         strErrors += _STR("Error loading blkindex.dat      \n");
     printf(" block index %15" PRI64d "ms\n", GetTimeMillis() - nStart);
+
+    if (fUseIndexer && strErrors.empty())
+    {
+        bool fNeedReindex = GetBoolArg("-reindex");
+        if (!fNeedReindex)
+        {
+            CTxDB txdb("r");
+            int nIndexerHeight = -1;
+            txdb.ReadIndexerHeight(nIndexerHeight);
+            txdb.Close();
+            if (nIndexerHeight != nBestHeight)
+            {
+                printf("Indexer height %d != best height %d, triggering reindex\n", nIndexerHeight, nBestHeight);
+                fNeedReindex = true;
+            }
+        }
+        if (fNeedReindex)
+        {
+            printf("Building UTXO and address indexes...\n");
+            nStart = GetTimeMillis();
+            fIndexerRebuilding = true;
+            if (!ReindexUTXOs())
+                strErrors += _STR("Error building UTXO indexes      \n");
+            printf(" reindex     %15" PRI64d "ms\n", GetTimeMillis() - nStart);
+        }
+        else
+        {
+            printf("Indexer up to date at height %d\n", nBestHeight);
+        }
+    }
 
     printf("Loading wallet...\n");
     nStart = GetTimeMillis();
@@ -864,6 +899,8 @@ bool AppInit(int argc, char* argv[])
             "  -daemon           " + _("Run in the background as a daemon and accept commands\n") +
             "  -irc              " + _("Enable IRC peer discovery (disabled by default)\n") +
             "  -recover          " + _("Recover database and extract keys from corrupted wallet\n") +
+            "  -indexer          " + _("Enable UTXO and address indexing (getaddressbalance, getaddressutxos, etc.)\n") +
+            "  -reindex          " + _("Force rebuild of UTXO indexes on startup (use with -indexer)\n") +
             "  --help            " + _("This help message\n");
         fprintf(stderr, "%s", strUsage.c_str());
         return false;
@@ -879,6 +916,10 @@ bool AppInit(int argc, char* argv[])
     fCORS = GetBoolArg("-cors");
 
     fPrintToDebugger = GetBoolArg("-printtodebugger");
+
+    fUseIndexer = GetBoolArg("-indexer");
+    if (fUseIndexer)
+        printf("UTXO/address indexer: enabled\n");
 
     if (!fDebug && !pszSetDataDir[0])
         ShrinkDebugFile();
@@ -964,6 +1005,38 @@ bool AppInit(int argc, char* argv[])
     {
         fprintf(stderr, "Error loading block index\n");
         return false;
+    }
+
+    if (fUseIndexer)
+    {
+        bool fNeedReindex = GetBoolArg("-reindex");
+        if (!fNeedReindex)
+        {
+            CTxDB txdb("r");
+            int nIndexerHeight = -1;
+            txdb.ReadIndexerHeight(nIndexerHeight);
+            txdb.Close();
+            if (nIndexerHeight != nBestHeight)
+            {
+                printf("Indexer height %d != best height %d, triggering reindex\n", nIndexerHeight, nBestHeight);
+                fNeedReindex = true;
+            }
+        }
+        if (fNeedReindex)
+        {
+            printf("Building UTXO and address indexes...\n");
+            fIndexerRebuilding = true;
+            if (!ReindexUTXOs())
+            {
+                fprintf(stderr, "Error building UTXO indexes\n");
+                return false;
+            }
+            printf("UTXO indexes built successfully\n");
+        }
+        else
+        {
+            printf("Indexer up to date at height %d\n", nBestHeight);
+        }
     }
 
     bool fFirstRun;

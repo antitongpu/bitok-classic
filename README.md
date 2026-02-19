@@ -106,6 +106,25 @@ The Bitcoin whitepaper dedicated an entire section to simplified payment verific
 
 See [SPV_CLIENT.md](SPV_CLIENT.md) for the full protocol specification and architecture options.
 
+## Address Indexer
+
+An optional per-address UTXO and transaction index for web3, dApps, exchange deposit tracking, and any service that needs history for arbitrary addresses.
+
+Enable with `-indexer` (or `indexer=1` in `bitok.conf`). The indexer is fully automatic — on first start, or whenever it falls behind the chain tip, it rebuilds itself without any manual intervention.
+
+The index stores **only unspent outputs**. Spent outputs are removed immediately when a transaction is confirmed, which keeps the database size very small regardless of chain history length.
+
+RPC methods available when indexer is active:
+
+| Method | Description |
+|--------|-------------|
+| `getindexerinfo` | Indexer status, height, and sync state |
+| `getaddressbalance <addr>` | Confirmed spendable balance of any address |
+| `getaddressutxos <addr>` | Unspent outputs for any address |
+| `getaddresstxids <addr>` | Full transaction history for any address |
+
+See [RPC_API.md](RPC_API.md) (Address Indexer Operations) for full reference.
+
 ## Key Management
 
 **RPC:**
@@ -151,6 +170,7 @@ make -f makefile.unix gui
 ./bitokd -gen                     # run node + mine
 ./bitokd -daemon                  # background mode
 ./bitokd stop                     # stop daemon
+./bitokd -indexer                 # enable address/UTXO indexer (auto-syncs on start)
 ```
 
 **Configuration file location:**
@@ -169,6 +189,14 @@ rpcpassword=pass
 gen=1
 addnode=1.2.3.4
 ```
+
+For browser-based clients (web3 dApps, web wallets, dashboards), enable CORS:
+```ini
+cors=1
+corsorigin=http://localhost:5173
+```
+
+See [RPC_API.md](RPC_API.md) for full CORS configuration details.
 
 **RPC:**
 ```bash

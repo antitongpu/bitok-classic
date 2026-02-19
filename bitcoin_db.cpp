@@ -926,6 +926,249 @@ bool CTxDB::WriteHashBestChain(uint256 hashBestChain)
     return Write(string("hashBestChain"), hashBestChain);
 }
 
+bool fUseIndexer = false;
+bool fIndexerRebuilding = false;
+
+bool CTxDB::WriteIndexerHeight(int nHeight)
+{
+    return Write(string("indexerheight"), nHeight);
+}
+
+bool CTxDB::ReadIndexerHeight(int& nHeight)
+{
+    nHeight = -1;
+    return Read(string("indexerheight"), nHeight);
+}
+
+bool CTxDB::WriteAddrTx(uint160 addr, uint256 txhash, int nHeight)
+{
+    return Write(make_pair(make_pair(string("addrtx"), addr), txhash), nHeight);
+}
+
+bool CTxDB::EraseAddrTx(uint160 addr, uint256 txhash)
+{
+    return Erase(make_pair(make_pair(string("addrtx"), addr), txhash));
+}
+
+bool CTxDB::ReadAddrTxids(uint160 addr, vector<uint256>& vtxids)
+{
+    vtxids.clear();
+
+    Dbc* pcursor = GetCursor();
+    if (!pcursor)
+        return false;
+
+    unsigned int fFlags = DB_SET_RANGE;
+    loop
+    {
+        CDataStream ssKey(SER_DISK);
+        if (fFlags == DB_SET_RANGE)
+            ssKey << make_pair(make_pair(string("addrtx"), addr), uint256(0));
+        CDataStream ssValue(SER_DISK);
+        int ret = ReadAtCursor(pcursor, ssKey, ssValue, fFlags);
+        fFlags = DB_NEXT;
+        if (ret == DB_NOTFOUND)
+            break;
+        else if (ret != 0)
+        {
+            pcursor->close();
+            return false;
+        }
+
+        string strType;
+        uint160 addrItem;
+        uint256 txhash;
+        try
+        {
+            ssKey >> strType >> addrItem >> txhash;
+        }
+        catch (...)
+        {
+            break;
+        }
+
+        if (strType != "addrtx" || addrItem != addr)
+            break;
+
+        vtxids.push_back(txhash);
+    }
+
+    pcursor->close();
+    return true;
+}
+
+struct CAddrOutEntry
+{
+    int64 nValue;
+    int nHeight;
+    bool fCoinBase;
+
+    CAddrOutEntry() : nValue(0), nHeight(0), fCoinBase(false) {}
+
+    IMPLEMENT_SERIALIZE(
+        READWRITE(nValue);
+        READWRITE(nHeight);
+        READWRITE(fCoinBase);
+    )
+};
+
+bool CTxDB::WriteAddrOut(uint160 addr, uint256 txhash, unsigned int n, int64 nValue, int nHeight, bool fCoinBase)
+{
+    CAddrOutEntry entry;
+    entry.nValue = nValue;
+    entry.nHeight = nHeight;
+    entry.fCoinBase = fCoinBase;
+    return Write(make_pair(make_pair(string("addrout"), addr), make_pair(txhash, n)), entry);
+}
+
+bool CTxDB::EraseAddrOut(uint160 addr, uint256 txhash, unsigned int n)
+{
+    return Erase(make_pair(make_pair(string("addrout"), addr), make_pair(txhash, n)));
+}
+
+bool CTxDB::ReadAddrOut(uint160 addr, uint256 txhash, unsigned int n, int64& nValue, int& nHeight)
+{
+    CAddrOutEntry entry;
+    if (!Read(make_pair(make_pair(string("addrout"), addr), make_pair(txhash, n)), entry))
+        return false;
+    nValue = entry.nValue;
+    nHeight = entry.nHeight;
+    return true;
+}
+
+bool CTxDB::ReadAddrUTXOs(uint160 addr, vector<pair<COutPoint, pair<int64, pair<int, bool> > > >& vUTXOs)
+{
+    vUTXOs.clear();
+
+    Dbc* pcursor = GetCursor();
+    if (!pcursor)
+        return false;
+
+    unsigned int fFlags = DB_SET_RANGE;
+    loop
+    {
+        CDataStream ssKey(SER_DISK);
+        if (fFlags == DB_SET_RANGE)
+            ssKey << make_pair(make_pair(string("addrout"), addr), make_pair(uint256(0), (unsigned int)0));
+        CDataStream ssValue(SER_DISK);
+        int ret = ReadAtCursor(pcursor, ssKey, ssValue, fFlags);
+        fFlags = DB_NEXT;
+        if (ret == DB_NOTFOUND)
+            break;
+        else if (ret != 0)
+        {
+            pcursor->close();
+            return false;
+        }
+
+        string strType;
+        uint160 addrItem;
+        uint256 txhash;
+        unsigned int nOut;
+        try
+        {
+            ssKey >> strType >> addrItem >> txhash >> nOut;
+        }
+        catch (...)
+        {
+            break;
+        }
+
+        if (strType != "addrout" || addrItem != addr)
+            break;
+
+        CAddrOutEntry entry;
+        try
+        {
+            ssValue >> entry;
+        }
+        catch (...)
+        {
+            continue;
+        }
+
+        vUTXOs.push_back(make_pair(COutPoint(txhash, nOut),
+            make_pair(entry.nValue, make_pair(entry.nHeight, entry.fCoinBase))));
+    }
+
+    pcursor->close();
+    return true;
+}
+
+static bool EraseKeysByPrefix(Db* pdb, DbTxn* ptxn, const string& strPrefix)
+{
+    Dbc* pcursor = NULL;
+    if (pdb->cursor(NULL, &pcursor, 0) != 0 || pcursor == NULL)
+        return false;
+
+    vector<vector<unsigned char> > vKeysToErase;
+
+    CDataStream ssSeek(SER_DISK);
+    ssSeek << strPrefix;
+    Dbt datSeek;
+    datSeek.set_data(&ssSeek[0]);
+    datSeek.set_size(ssSeek.size());
+    Dbt datValue;
+    datValue.set_flags(DB_DBT_MALLOC);
+
+    Dbt datKey;
+    datKey.set_data(&ssSeek[0]);
+    datKey.set_size(ssSeek.size());
+    datKey.set_flags(DB_DBT_MALLOC);
+
+    int ret = pcursor->get(&datKey, &datValue, DB_SET_RANGE);
+    while (ret == 0)
+    {
+        if (datKey.get_data() == NULL) break;
+
+        const char* pKey = (const char*)datKey.get_data();
+        size_t nKeySize = datKey.get_size();
+
+        bool fMatch = false;
+        if (nKeySize >= ssSeek.size())
+        {
+            CDataStream ssKeyType(pKey, pKey + nKeySize, SER_DISK);
+            string strType;
+            try { ssKeyType >> strType; } catch (...) {}
+            fMatch = (strType == strPrefix);
+        }
+
+        if (datKey.get_data()) { free(datKey.get_data()); datKey.set_data(NULL); }
+        if (datValue.get_data()) { free(datValue.get_data()); datValue.set_data(NULL); }
+
+        if (!fMatch)
+            break;
+
+        CDataStream ssKeyStore(pKey, pKey + nKeySize, SER_DISK);
+        vKeysToErase.push_back(vector<unsigned char>(ssKeyStore.begin(), ssKeyStore.end()));
+
+        datKey.set_flags(DB_DBT_MALLOC);
+        datValue.set_flags(DB_DBT_MALLOC);
+        ret = pcursor->get(&datKey, &datValue, DB_NEXT);
+    }
+
+    if (datKey.get_data()) free(datKey.get_data());
+    if (datValue.get_data()) free(datValue.get_data());
+    pcursor->close();
+
+    for (size_t i = 0; i < vKeysToErase.size(); i++)
+    {
+        Dbt dk(&vKeysToErase[i][0], vKeysToErase[i].size());
+        pdb->del(ptxn, &dk, 0);
+    }
+
+    return true;
+}
+
+bool CTxDB::EraseAllIndexerData()
+{
+    DbTxn* ptxn = GetTxn();
+    EraseKeysByPrefix(pdb, ptxn, string("addrtx"));
+    EraseKeysByPrefix(pdb, ptxn, string("addrout"));
+    Erase(string("indexerheight"));
+    return true;
+}
+
 CBlockIndex* InsertBlockIndex(uint256 hash)
 {
     if (hash == 0)

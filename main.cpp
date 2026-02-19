@@ -1292,12 +1292,85 @@ bool CTransaction::ClientConnectInputs()
 
 
 
+static bool GetScriptAddr(const CScript& scriptPubKey, uint160& addrRet)
+{
+    if (ExtractHash160(scriptPubKey, addrRet))
+        return true;
+    if (scriptPubKey.size() == 35 && scriptPubKey[0] == 33 && scriptPubKey[34] == OP_CHECKSIG)
+    {
+        vector<unsigned char> vchPubKey(scriptPubKey.begin() + 1, scriptPubKey.begin() + 34);
+        addrRet = Hash160(vchPubKey);
+        return true;
+    }
+    if (scriptPubKey.size() == 67 && scriptPubKey[0] == 65 && scriptPubKey[66] == OP_CHECKSIG)
+    {
+        vector<unsigned char> vchPubKey(scriptPubKey.begin() + 1, scriptPubKey.begin() + 66);
+        addrRet = Hash160(vchPubKey);
+        return true;
+    }
+    return false;
+}
+
 bool CBlock::DisconnectBlock(CTxDB& txdb, CBlockIndex* pindex)
 {
     // Disconnect in reverse order
     for (int i = vtx.size()-1; i >= 0; i--)
+    {
+        const CTransaction& tx = vtx[i];
+        uint256 txhash = tx.GetHash();
+
+        if (fUseIndexer && !fIndexerRebuilding)
+        {
+            // Restore inputs: re-add addrout entries for UTXOs that were spent by this tx
+            if (!tx.IsCoinBase())
+            {
+                for (unsigned int j = 0; j < tx.vin.size(); j++)
+                {
+                    const COutPoint& prevout = tx.vin[j].prevout;
+
+                    CTransaction txPrev;
+                    CTxIndex txPrevIndex;
+                    if (txdb.ReadDiskTx(prevout.hash, txPrev, txPrevIndex))
+                    {
+                        if (prevout.n < txPrev.vout.size())
+                        {
+                            uint160 addr;
+                            if (GetScriptAddr(txPrev.vout[prevout.n].scriptPubKey, addr))
+                            {
+                                int nPrevHeight = 0;
+                                for (auto mi = mapBlockIndex.begin(); mi != mapBlockIndex.end(); ++mi)
+                                {
+                                    CBlockIndex* pb = mi->second;
+                                    if (pb->nFile == txPrevIndex.pos.nFile && pb->nBlockPos == txPrevIndex.pos.nBlockPos)
+                                    {
+                                        nPrevHeight = pb->nHeight;
+                                        break;
+                                    }
+                                }
+                                bool fPrevCoinBase = txPrev.IsCoinBase();
+                                txdb.WriteAddrOut(addr, prevout.hash, prevout.n, txPrev.vout[prevout.n].nValue, nPrevHeight, fPrevCoinBase);
+                                txdb.EraseAddrTx(addr, txhash);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Remove outputs created by this tx
+            for (unsigned int n = 0; n < tx.vout.size(); n++)
+            {
+                uint160 addr;
+                if (GetScriptAddr(tx.vout[n].scriptPubKey, addr))
+                {
+                    txdb.EraseAddrOut(addr, txhash, n);
+                    txdb.EraseAddrTx(addr, txhash);
+                }
+            }
+        }
+
         if (!vtx[i].DisconnectInputs(txdb))
             return false;
+    }
 
     // Update block index on disk without changing it in memory.
     // The memory index structure will be changed after the db commits.
@@ -1307,6 +1380,9 @@ bool CBlock::DisconnectBlock(CTxDB& txdb, CBlockIndex* pindex)
         blockindexPrev.hashNext = 0;
         txdb.WriteBlockIndex(blockindexPrev);
     }
+
+    if (fUseIndexer && !fIndexerRebuilding)
+        txdb.WriteIndexerHeight(pindex->nHeight - 1);
 
     return true;
 }
@@ -1325,6 +1401,50 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex)
 
         if (!tx.ConnectInputs(txdb, mapUnused, posThisTx, pindex->nHeight, nFees, true, false))
             return false;
+
+        if (fUseIndexer && !fIndexerRebuilding)
+        {
+            uint256 txhash = tx.GetHash();
+            bool fCoinBase = tx.IsCoinBase();
+
+            // Index each output as a UTXO
+            for (unsigned int n = 0; n < tx.vout.size(); n++)
+            {
+                const CTxOut& txout = tx.vout[n];
+                uint160 addr;
+                if (GetScriptAddr(txout.scriptPubKey, addr))
+                {
+                    txdb.WriteAddrOut(addr, txhash, n, txout.nValue, pindex->nHeight, fCoinBase);
+                    txdb.WriteAddrTx(addr, txhash, pindex->nHeight);
+                }
+            }
+
+            // Spend inputs: erase their addrout entries (they are no longer UTXOs)
+            // and link the spending tx to the sender's address
+            if (!fCoinBase)
+            {
+                for (unsigned int k = 0; k < tx.vin.size(); k++)
+                {
+                    const COutPoint& prevout = tx.vin[k].prevout;
+
+                    // Find the sender address via addrout scan of prev outputs
+                    // We must check all possible addresses for this outpoint
+                    CTransaction txPrev;
+                    if (txdb.ReadDiskTx(prevout.hash, txPrev))
+                    {
+                        if (prevout.n < txPrev.vout.size())
+                        {
+                            uint160 addrSender;
+                            if (GetScriptAddr(txPrev.vout[prevout.n].scriptPubKey, addrSender))
+                            {
+                                txdb.EraseAddrOut(addrSender, prevout.hash, prevout.n);
+                                txdb.WriteAddrTx(addrSender, txhash, pindex->nHeight);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (vtx[0].GetValueOut() > GetBlockValue(nFees))
@@ -1339,6 +1459,9 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex)
         txdb.WriteBlockIndex(blockindexPrev);
     }
 
+    if (fUseIndexer && !fIndexerRebuilding)
+        txdb.WriteIndexerHeight(pindex->nHeight);
+
     // Watch for transactions paying to me
     foreach(CTransaction& tx, vtx)
         AddToWalletIfMine(tx, this);
@@ -1347,6 +1470,104 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex)
 }
 
 
+
+bool ReindexUTXOs()
+{
+    printf("ReindexUTXOs: starting full reindex of UTXO and address indexes\n");
+
+    if (pindexGenesisBlock == NULL)
+    {
+        printf("ReindexUTXOs: no genesis block, nothing to index\n");
+        fIndexerRebuilding = false;
+        return true;
+    }
+
+    CTxDB txdb;
+
+    txdb.TxnBegin();
+    if (!txdb.EraseAllIndexerData())
+    {
+        fIndexerRebuilding = false;
+        return error("ReindexUTXOs: EraseAllIndexerData failed");
+    }
+    txdb.TxnCommit();
+
+    CBlockIndex* pindex = pindexGenesisBlock;
+    int nProcessed = 0;
+    const int nBatchSize = 500;
+
+    txdb.TxnBegin();
+
+    while (pindex)
+    {
+        CBlock block;
+        if (!block.ReadFromDisk(pindex->nFile, pindex->nBlockPos))
+        {
+            txdb.TxnAbort();
+            fIndexerRebuilding = false;
+            printf("ReindexUTXOs: ReadFromDisk failed at height %d\n", pindex->nHeight);
+            return false;
+        }
+
+        foreach(const CTransaction& tx, block.vtx)
+        {
+            uint256 txhash = tx.GetHash();
+            bool fCoinBase = tx.IsCoinBase();
+
+            for (unsigned int n = 0; n < tx.vout.size(); n++)
+            {
+                const CTxOut& txout = tx.vout[n];
+                uint160 addr;
+                if (GetScriptAddr(txout.scriptPubKey, addr))
+                {
+                    txdb.WriteAddrOut(addr, txhash, n, txout.nValue, pindex->nHeight, fCoinBase);
+                    txdb.WriteAddrTx(addr, txhash, pindex->nHeight);
+                }
+            }
+
+            if (!fCoinBase)
+            {
+                for (unsigned int k = 0; k < tx.vin.size(); k++)
+                {
+                    const COutPoint& prevout = tx.vin[k].prevout;
+
+                    CTransaction txPrev;
+                    if (txdb.ReadDiskTx(prevout.hash, txPrev))
+                    {
+                        if (prevout.n < txPrev.vout.size())
+                        {
+                            uint160 addrSender;
+                            if (GetScriptAddr(txPrev.vout[prevout.n].scriptPubKey, addrSender))
+                            {
+                                txdb.EraseAddrOut(addrSender, prevout.hash, prevout.n);
+                                txdb.WriteAddrTx(addrSender, txhash, pindex->nHeight);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        txdb.WriteIndexerHeight(pindex->nHeight);
+        nProcessed++;
+
+        if (nProcessed % nBatchSize == 0)
+        {
+            txdb.TxnCommit();
+            printf("ReindexUTXOs: processed %d blocks (height %d)\n", nProcessed, pindex->nHeight);
+            txdb.TxnBegin();
+        }
+
+        pindex = pindex->pnext;
+    }
+
+    txdb.TxnCommit();
+    txdb.Close();
+
+    fIndexerRebuilding = false;
+    printf("ReindexUTXOs: completed, indexed %d blocks\n", nProcessed);
+    return true;
+}
 
 bool Reorganize(CTxDB& txdb, CBlockIndex* pindexNew)
 {

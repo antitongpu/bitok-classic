@@ -101,6 +101,7 @@ CBlock* CreateNewBlock(CKey& key);
 int64 GetNetworkHashPS(int lookup = 30);
 bool ProcessBlock(CNode* pfrom, CBlock* pblock);
 double ComputePriority(const CTransaction& tx, CTxDB& txdb, int nHeight);
+bool ReindexUTXOs();
 
 
 

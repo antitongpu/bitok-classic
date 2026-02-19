@@ -3131,6 +3131,150 @@ Value listpreimages(const Array& params, bool fHelp)
 }
 
 
+Value getindexerinfo(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getindexerinfo\n"
+            "Returns information about the UTXO/address indexer status.");
+
+    Object result;
+    result.push_back(Pair("enabled", fUseIndexer));
+
+    if (fUseIndexer)
+    {
+        CTxDB txdb("r");
+        int nIndexerHeight = -1;
+        txdb.ReadIndexerHeight(nIndexerHeight);
+        txdb.Close();
+        result.push_back(Pair("height", nIndexerHeight));
+        result.push_back(Pair("bestHeight", nBestHeight));
+        result.push_back(Pair("synced", nIndexerHeight == nBestHeight));
+    }
+
+    return result;
+}
+
+
+
+Value getaddresstxids(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 1)
+        throw runtime_error(
+            "getaddresstxids <address>\n"
+            "Returns list of transaction IDs involving <address>. Requires -indexer.");
+
+    if (!fUseIndexer)
+        throw runtime_error("getaddresstxids requires node started with -indexer flag");
+
+    string strAddress = params[0].get_str();
+    uint160 hash160;
+    if (!AddressToHash160(strAddress, hash160))
+        throw runtime_error("Invalid Bitok address");
+
+    CTxDB txdb("r");
+    vector<uint256> vtxids;
+    if (!txdb.ReadAddrTxids(hash160, vtxids))
+        throw runtime_error("ReadAddrTxids failed");
+    txdb.Close();
+
+    Array result;
+    for (size_t i = 0; i < vtxids.size(); i++)
+        result.push_back(vtxids[i].GetHex());
+
+    return result;
+}
+
+
+Value getaddressutxos(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 1)
+        throw runtime_error(
+            "getaddressutxos <address>\n"
+            "Returns unspent outputs for <address>. Requires -indexer.");
+
+    if (!fUseIndexer)
+        throw runtime_error("getaddressutxos requires node started with -indexer flag");
+
+    string strAddress = params[0].get_str();
+    uint160 hash160;
+    if (!AddressToHash160(strAddress, hash160))
+        throw runtime_error("Invalid Bitok address");
+
+    CTxDB txdb("r");
+    vector<pair<COutPoint, pair<int64, pair<int, bool> > > > vUTXOs;
+    if (!txdb.ReadAddrUTXOs(hash160, vUTXOs))
+        throw runtime_error("ReadAddrUTXOs failed");
+    txdb.Close();
+
+    int nMaturity = GetCoinbaseMaturity();
+
+    Array result;
+    for (size_t i = 0; i < vUTXOs.size(); i++)
+    {
+        const COutPoint& outpoint = vUTXOs[i].first;
+        int64 nValue = vUTXOs[i].second.first;
+        int nHeight = vUTXOs[i].second.second.first;
+        bool fCoinBase = vUTXOs[i].second.second.second;
+        int nConfs = nBestHeight - nHeight + 1;
+
+        if (fCoinBase && nConfs < nMaturity)
+            continue;
+
+        Object entry;
+        entry.push_back(Pair("txid", outpoint.hash.GetHex()));
+        entry.push_back(Pair("vout", (int)outpoint.n));
+        entry.push_back(Pair("value", (double)nValue / (double)COIN));
+        entry.push_back(Pair("height", nHeight));
+        entry.push_back(Pair("confirmations", nConfs));
+        entry.push_back(Pair("coinbase", fCoinBase));
+        result.push_back(entry);
+    }
+
+    return result;
+}
+
+
+Value getaddressbalance(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 1)
+        throw runtime_error(
+            "getaddressbalance <address>\n"
+            "Returns confirmed balance of <address>. Requires -indexer.");
+
+    if (!fUseIndexer)
+        throw runtime_error("getaddressbalance requires node started with -indexer flag");
+
+    string strAddress = params[0].get_str();
+    uint160 hash160;
+    if (!AddressToHash160(strAddress, hash160))
+        throw runtime_error("Invalid Bitok address");
+
+    CTxDB txdb("r");
+    vector<pair<COutPoint, pair<int64, pair<int, bool> > > > vUTXOs;
+    if (!txdb.ReadAddrUTXOs(hash160, vUTXOs))
+        throw runtime_error("ReadAddrUTXOs failed");
+    txdb.Close();
+
+    int nMaturity = GetCoinbaseMaturity();
+
+    int64 nBalance = 0;
+    for (size_t i = 0; i < vUTXOs.size(); i++)
+    {
+        int nHeight = vUTXOs[i].second.second.first;
+        bool fCoinBase = vUTXOs[i].second.second.second;
+        int nConfs = nBestHeight - nHeight + 1;
+
+        if (fCoinBase && nConfs < nMaturity)
+            continue;
+
+        nBalance += vUTXOs[i].second.first;
+    }
+
+    return (double)nBalance / (double)COIN;
+}
+
+
 //
 // Call Table
 //
@@ -3189,6 +3333,11 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("validatescript",        &validatescript),
     make_pair("addpreimage",           &addpreimage),
     make_pair("listpreimages",         &listpreimages),
+    make_pair("getindexerinfo",        &getindexerinfo),
+
+    make_pair("getaddresstxids",       &getaddresstxids),
+    make_pair("getaddressutxos",       &getaddressutxos),
+    make_pair("getaddressbalance",     &getaddressbalance),
 };
 map<string, rpcfn_type> mapCallTable(pCallTable, pCallTable + sizeof(pCallTable)/sizeof(pCallTable[0]));
 

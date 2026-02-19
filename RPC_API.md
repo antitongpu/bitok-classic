@@ -20,9 +20,10 @@ Version: Bitok 0.3.19.8 Mainnet
 10. [Network Operations](#network-operations)
 11. [Block Chain Operations](#block-chain-operations)
 12. [SPV Client Operations](#spv-client-operations)
-13. [Integration Examples](#integration-examples)
-14. [Error Handling](#error-handling)
-15. [Security Best Practices](#security-best-practices)
+13. [Address Indexer Operations](#address-indexer-operations)
+14. [Integration Examples](#integration-examples)
+15. [Error Handling](#error-handling)
+16. [Security Best Practices](#security-best-practices)
 
 ---
 
@@ -85,9 +86,9 @@ The daemon reads credentials from the config file automatically. No need for com
 3. **Local Only:** By default, RPC binds to 127.0.0.1. Don't change that unless you know what you're doing.
 4. **SSH Tunnel:** For remote access, tunnel through SSH instead of exposing the port.
 
-### CORS (Browser / Web3 Access)
+### CORS (Browser / Web Wallet Access)
 
-By default the RPC server does not send CORS headers, so browser-based clients (web3 dApps) are blocked by the same-origin policy.
+By default the RPC server does not send CORS headers, so browser-based clients (web wallets, dashboards) are blocked by the same-origin policy.
 
 Enable CORS in `bitok.conf`:
 
@@ -104,7 +105,7 @@ corsorigin=http://localhost:5173
 
 When `cors=1` and no `corsorigin` is set, the server responds with `Access-Control-Allow-Origin: *`. When `corsorigin` is set, only that origin is allowed.
 
-**dApp `.env` example:**
+**Web wallet `.env` example:**
 
 ```ini
 VITE_RPC_USER=yourusername
@@ -2757,6 +2758,191 @@ def verify_payment_independently(rpc_node_a, rpc_node_b, txid):
 2. The reconstructed Merkle root must match the block header's `hashMerkleRoot`
 3. The block must exist in the node's main chain
 4. If any check fails, an empty array is returned
+
+---
+
+## Address Indexer Operations
+
+The address indexer maintains a persistent per-address index of UTXOs and transaction IDs. It enables fast balance and history lookups for any address without scanning the wallet.
+
+**Important:** the indexer stores only **unspent outputs**. When a UTXO is spent, it is removed from the index immediately on confirmation. This means the index size stays very small — proportional to the current UTXO set, not to the full transaction history of the chain.
+
+**Requires starting the node with `-indexer`:**
+
+```ini
+# bitok.conf
+indexer=1
+```
+
+Or on the command line:
+
+```bash
+./bitokd -indexer
+```
+
+The indexer is fully automatic. On first start, or whenever it falls behind the chain tip (e.g. after a crash or gap), `ReindexUTXOs()` runs at startup and brings the index up to date without any manual intervention. No `-reindex` flag is needed or provided.
+
+**Use cases:** block explorers, exchange hot wallets tracking arbitrary deposit addresses, SPV servers, and any service that needs address-level history without access to the private keys.
+
+---
+
+### getindexerinfo
+
+Returns the current status of the UTXO/address indexer.
+
+**Parameters:** None
+
+**Returns:** Object containing:
+- `enabled` (boolean) - Whether the node was started with `-indexer`
+- `height` (number) - Block height the index is built up to (only present when enabled)
+- `bestHeight` (number) - Current best chain height (only present when enabled)
+- `synced` (boolean) - Whether `height == bestHeight` (only present when enabled)
+
+**Example:**
+```bash
+./bitokd getindexerinfo
+```
+
+**Response (indexer enabled and synced):**
+```json
+{
+  "enabled": true,
+  "height": 84210,
+  "bestHeight": 84210,
+  "synced": true
+}
+```
+
+**Response (indexer disabled):**
+```json
+{
+  "enabled": false
+}
+```
+
+---
+
+### getaddressbalance
+
+Returns the confirmed spendable balance for any Bitok address. Immature coinbase outputs (fewer than 100 confirmations) are excluded.
+
+**Requires:** node started with `-indexer`
+
+**Parameters:**
+- `address` (string, required) - The Bitok address to query
+
+**Returns:** Number (balance in BITOK)
+
+**Example:**
+```bash
+./bitokd getaddressbalance "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+```
+
+**Response:**
+```json
+75.50000000
+```
+
+**Error if indexer not enabled:**
+```json
+{
+  "error": {
+    "code": -1,
+    "message": "getaddressbalance requires node started with -indexer flag"
+  }
+}
+```
+
+---
+
+### getaddressutxos
+
+Returns the list of unspent transaction outputs for any Bitok address. Immature coinbase outputs are excluded.
+
+**Requires:** node started with `-indexer`
+
+**Parameters:**
+- `address` (string, required) - The Bitok address to query
+
+**Returns:** Array of objects containing:
+- `txid` (string) - Transaction ID
+- `vout` (number) - Output index within the transaction
+- `value` (number) - Amount in BITOK
+- `height` (number) - Block height the UTXO was created
+- `confirmations` (number) - Number of confirmations
+- `coinbase` (boolean) - Whether this output is from a coinbase transaction
+
+**Example:**
+```bash
+./bitokd getaddressutxos "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+```
+
+**Response:**
+```json
+[
+  {
+    "txid": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd",
+    "vout": 0,
+    "value": 50.00000000,
+    "height": 84100,
+    "confirmations": 111,
+    "coinbase": false
+  },
+  {
+    "txid": "b2c3d4e5f67890123456789012345678901234567890123456789012345bcde",
+    "vout": 1,
+    "value": 25.50000000,
+    "height": 84190,
+    "confirmations": 21,
+    "coinbase": false
+  }
+]
+```
+
+**Use Case - Non-custodial UTXO selection:**
+```python
+def get_address_utxos(rpc, address, min_conf=1):
+    utxos = rpc.call('getaddressutxos', [address])
+    return [u for u in utxos if u['confirmations'] >= min_conf]
+```
+
+---
+
+### getaddresstxids
+
+Returns a list of all transaction IDs that involve a given address (both incoming and outgoing).
+
+**Requires:** node started with `-indexer`
+
+**Parameters:**
+- `address` (string, required) - The Bitok address to query
+
+**Returns:** Array of transaction ID strings (hex), in index insertion order
+
+**Example:**
+```bash
+./bitokd getaddresstxids "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+```
+
+**Response:**
+```json
+[
+  "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd",
+  "b2c3d4e5f67890123456789012345678901234567890123456789012345bcde",
+  "c3d4e5f678901234567890123456789012345678901234567890123456cdef"
+]
+```
+
+**Use Case - Address history page:**
+```python
+def get_address_history(rpc, address):
+    txids = rpc.call('getaddresstxids', [address])
+    txs = []
+    for txid in txids:
+        tx = rpc.call('getrawtransaction', [txid, 1])
+        txs.append(tx)
+    return txs
+```
 
 ---
 

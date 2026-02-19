@@ -27,6 +27,9 @@ extern void DBFlush(bool fShutdown);
 extern bool RecoverDatabaseEnvironment();
 extern bool RecoverWalletKeys();
 
+extern bool fUseIndexer;
+extern bool fIndexerRebuilding;
+
 
 
 
@@ -283,6 +286,19 @@ public:
     bool ReadHashBestChain(uint256& hashBestChain);
     bool WriteHashBestChain(uint256 hashBestChain);
     bool LoadBlockIndex();
+
+    bool WriteIndexerHeight(int nHeight);
+    bool ReadIndexerHeight(int& nHeight);
+
+    bool WriteAddrTx(uint160 addr, uint256 txhash, int nHeight);
+    bool EraseAddrTx(uint160 addr, uint256 txhash);
+    bool ReadAddrTxids(uint160 addr, vector<uint256>& vtxids);
+
+    bool WriteAddrOut(uint160 addr, uint256 txhash, unsigned int n, int64 nValue, int nHeight, bool fCoinBase);
+    bool EraseAddrOut(uint160 addr, uint256 txhash, unsigned int n);
+    bool ReadAddrUTXOs(uint160 addr, vector<pair<COutPoint, pair<int64, pair<int, bool> > > >& vUTXOs);
+    bool ReadAddrOut(uint160 addr, uint256 txhash, unsigned int n, int64& nValue, int& nHeight);
+    bool EraseAllIndexerData();
 };
 
 
