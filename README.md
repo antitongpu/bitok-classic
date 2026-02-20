@@ -236,7 +236,7 @@ See [BITOKPOW.md](BITOKPOW.md) for algorithm details.
 
 ## Peer Discovery
 
-IRC bootstrap via `irc.libera.chat` channel #bitok, same mechanism as original Bitcoin.
+DNS seeds and optional IRC bootstrap (same as original Bitcoin).
 
 Manual peer addition:
 ```bash
