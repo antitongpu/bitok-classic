@@ -205,7 +205,7 @@ bool ThreadSafeAskFee(int64 nFeeRequired, const string& strCaption, wxWindow* pa
     string strMessage = strprintf(
         _("This transaction requires a fee of %s.  "
           "The fee helps support the network and prevents spam.  "
-          "Do you want to pay the fee?"),
+          "Do you want to pay the fee?").mb_str(),
         FormatMoney(nFeeRequired).c_str());
     return (ThreadSafeMessageBox(strMessage, strCaption, wxYES_NO, parent) == wxYES);
 }
@@ -1371,7 +1371,7 @@ void CMainFrame::OnButtonNew(wxCommandEvent& event)
                 bind(RescanProgressCallback, &progressDlg, _1, _2, _3));
             progressDlg.Update(100);
             if (nFound > 0)
-                wxMessageBox(strprintf(_("Rescan complete. Found %d transaction(s)."), nFound),
+                wxMessageBox(strprintf(_("Rescan complete. Found %d transaction(s).").mb_str(), nFound),
                     _("Import Private Key"), wxOK | wxICON_INFORMATION);
         }
     }
@@ -2216,7 +2216,7 @@ void CSendingDialog::OnPaint(wxPaintEvent& event)
     }
     if (fAbort && fCanCancel && IsShown())
     {
-        strcpy(pszStatus, _("CANCELLED"));
+        strcpy(pszStatus, (const char*)_("CANCELLED").mb_str());
         m_buttonOK->Enable(true);
         m_buttonOK->SetFocus();
         m_buttonCancel->Enable(false);
@@ -2247,7 +2247,7 @@ bool CSendingDialog::Status()
     if (fAbort && fCanCancel)
     {
         memset(pszStatus, 0, 10);
-        strcpy(pszStatus, _("CANCELLED"));
+        strcpy(pszStatus, (const char*)_("CANCELLED").mb_str());
         Repaint();
         fWorkDone = true;
         return false;
@@ -2853,7 +2853,7 @@ void CAddressBookDialog::OnButtonNew(wxCommandEvent& event)
                     bind(RescanProgressCallback, &progressDlg, _1, _2, _3));
                 progressDlg.Update(100);
                 if (nFound > 0)
-                    wxMessageBox(strprintf(_("Rescan complete. Found %d transaction(s)."), nFound),
+                    wxMessageBox(strprintf(_("Rescan complete. Found %d transaction(s).").mb_str(), nFound),
                         _("Import Private Key"), wxOK | wxICON_INFORMATION);
             }
         }
