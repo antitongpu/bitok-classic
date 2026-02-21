@@ -1199,6 +1199,28 @@ Value getrawtransaction(const Array& params, bool fHelp)
     result.push_back(Pair("version", tx.nVersion));
     result.push_back(Pair("locktime", (boost::int64_t)tx.nLockTime));
 
+    if (!txindex.pos.IsNull())
+    {
+        CRITICAL_BLOCK(cs_main)
+        {
+            for (auto mi = mapBlockIndex.begin(); mi != mapBlockIndex.end(); ++mi)
+            {
+                CBlockIndex* pindex = mi->second;
+                if (pindex->nFile == txindex.pos.nFile && pindex->nBlockPos == txindex.pos.nBlockPos)
+                {
+                    result.push_back(Pair("blockhash", pindex->GetBlockHash().ToString()));
+                    result.push_back(Pair("blockheight", pindex->nHeight));
+                    result.push_back(Pair("blocktime", (boost::int64_t)pindex->nTime));
+                    if (pindex->IsInMainChain())
+                        result.push_back(Pair("confirmations", nBestHeight - pindex->nHeight + 1));
+                    else
+                        result.push_back(Pair("confirmations", 0));
+                    break;
+                }
+            }
+        }
+    }
+
     Array vin;
     foreach(const CTxIn& txin, tx.vin)
     {
