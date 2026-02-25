@@ -67,15 +67,7 @@ if (nNextHeight % nInterval == 0)
 
 ### Behavior
 
-**Before Block 16000:**
-- Logs warnings for suspicious timestamps
-- Does NOT reject blocks (full backwards compatibility)
-- Allows monitoring of potential attacks
-
-**After Block 16000 (Mandatory Activation):**
-- Time warp protection enforced automatically for all nodes
-- Blocks with suspicious timestamps are rejected
-- No configuration required - protection is built-in
+Time warp protection is enforced on all nodes (active since block 16,000). Blocks with suspicious timestamps are rejected. No configuration required -- protection is built-in.
 
 ---
 

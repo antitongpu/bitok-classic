@@ -118,10 +118,10 @@ OP_INVERT
 
 These were disabled as a safety precaution, not because they were fundamentally unsound.
 
-BITOK plans enable these operations and explicit resource limits to prevent abuse:
-- maximum operation count
-- maximum stack size
-- maximum element size
+BITOK enables these operations with explicit resource limits to prevent abuse:
+- maximum operation count (201 per script)
+- maximum stack size (1,000 elements)
+- maximum element size (520 bytes)
 
 This follows the original approach: **capability with bounds**.
 
@@ -143,7 +143,7 @@ The original design includes simplified payment verification.
 
 > "The design outlines a lightweight client that does not need the full block chain.", - SN.
 
-BITOK plans support for header-only synchronization and Merkle proofs, allowing users to verify payments without storing the full chain, while merchants run full nodes.
+BITOK supports header-only synchronization and Merkle proofs, allowing users to verify payments without storing the full chain, while merchants run full nodes.
 
 ---
 

@@ -3153,6 +3153,549 @@ Value listpreimages(const Array& params, bool fHelp)
 }
 
 
+static bool IsHex(const string& str)
+{
+    if (str.empty() || str.size() % 2 != 0)
+        return false;
+    for (unsigned int i = 0; i < str.size(); i++)
+    {
+        char c = str[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+            return false;
+    }
+    return true;
+}
+
+
+static bool GetOpcodeByName(const string& name, opcodetype& opcodeRet)
+{
+    static map<string, opcodetype> mapOpNames;
+    if (mapOpNames.empty())
+    {
+        for (int op = 0; op <= OP_CHECKMULTISIGVERIFY; op++)
+        {
+            const char* pszName = GetOpName((opcodetype)op);
+            if (pszName && string(pszName) != "UNKNOWN_OPCODE")
+            {
+                mapOpNames[string(pszName)] = (opcodetype)op;
+                mapOpNames[string("OP_") + pszName] = (opcodetype)op;
+            }
+        }
+        mapOpNames["OP_0"] = OP_0;
+        mapOpNames["OP_FALSE"] = OP_0;
+        mapOpNames["OP_1"] = OP_1;
+        mapOpNames["OP_TRUE"] = OP_1;
+        mapOpNames["OP_2"] = OP_2;
+        mapOpNames["OP_3"] = OP_3;
+        mapOpNames["OP_4"] = OP_4;
+        mapOpNames["OP_5"] = OP_5;
+        mapOpNames["OP_6"] = OP_6;
+        mapOpNames["OP_7"] = OP_7;
+        mapOpNames["OP_8"] = OP_8;
+        mapOpNames["OP_9"] = OP_9;
+        mapOpNames["OP_10"] = OP_10;
+        mapOpNames["OP_11"] = OP_11;
+        mapOpNames["OP_12"] = OP_12;
+        mapOpNames["OP_13"] = OP_13;
+        mapOpNames["OP_14"] = OP_14;
+        mapOpNames["OP_15"] = OP_15;
+        mapOpNames["OP_16"] = OP_16;
+        mapOpNames["OP_1NEGATE"] = OP_1NEGATE;
+        mapOpNames["0"] = OP_0;
+        mapOpNames["-1"] = OP_1NEGATE;
+        mapOpNames["1"] = OP_1;
+        mapOpNames["2"] = OP_2;
+        mapOpNames["3"] = OP_3;
+        mapOpNames["4"] = OP_4;
+        mapOpNames["5"] = OP_5;
+        mapOpNames["6"] = OP_6;
+        mapOpNames["7"] = OP_7;
+        mapOpNames["8"] = OP_8;
+        mapOpNames["9"] = OP_9;
+        mapOpNames["10"] = OP_10;
+        mapOpNames["11"] = OP_11;
+        mapOpNames["12"] = OP_12;
+        mapOpNames["13"] = OP_13;
+        mapOpNames["14"] = OP_14;
+        mapOpNames["15"] = OP_15;
+        mapOpNames["16"] = OP_16;
+    }
+
+    map<string, opcodetype>::iterator it = mapOpNames.find(name);
+    if (it != mapOpNames.end())
+    {
+        opcodeRet = it->second;
+        return true;
+    }
+    return false;
+}
+
+
+Value buildscript(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "buildscript [\"element\",...]\n"
+            "Assemble a script from opcode names and hex data pushes.\n"
+            "\nEach element is either:\n"
+            "  - An opcode name: \"OP_DUP\", \"OP_HASH160\", \"OP_CHECKSIG\", etc.\n"
+            "  - A hex data string to push: \"deadbeef\", \"03aabbcc...\"\n"
+            "  - Numeric shorthand: \"0\" through \"16\", \"-1\"\n"
+            "\nReturns hex-encoded script and analysis.\n"
+            "\nExamples:\n"
+            "  buildscript [\"OP_DUP\",\"OP_HASH160\",\"89abcdef...\",\"OP_EQUALVERIFY\",\"OP_CHECKSIG\"]\n"
+            "  buildscript [\"OP_ADD\",\"OP_5\",\"OP_EQUAL\"]\n"
+            "  buildscript [\"OP_HASH160\",\"<20-byte-hash>\",\"OP_EQUALVERIFY\",\"OP_DUP\",\"OP_HASH160\",\"<20-byte-hash>\",\"OP_EQUALVERIFY\",\"OP_CHECKSIG\"]");
+
+    const Array& elements = params[0].get_array();
+    if (elements.empty())
+        throw runtime_error("Empty script elements");
+
+    CScript script;
+
+    for (unsigned int i = 0; i < elements.size(); i++)
+    {
+        string elem = elements[i].get_str();
+
+        opcodetype opcode;
+        if (GetOpcodeByName(elem, opcode))
+        {
+            script << opcode;
+        }
+        else
+        {
+            if (!IsHex(elem))
+                throw runtime_error(strprintf("Element %d is not a recognized opcode or valid hex: %s", i, elem.c_str()));
+
+            vector<unsigned char> data = ParseHex(elem);
+            if (data.size() > MAX_SCRIPT_ELEMENT_SIZE)
+                throw runtime_error(strprintf("Element %d exceeds max push size (%d > %d)", i, (int)data.size(), (int)MAX_SCRIPT_ELEMENT_SIZE));
+            script << data;
+        }
+    }
+
+    Object result;
+    result.push_back(Pair("hex", HexStr(script.begin(), script.end(), false)));
+    result.push_back(Pair("asm", script.ToString()));
+    result.push_back(Pair("size", (int)script.size()));
+
+    int nRequired;
+    Array addresses;
+    string strType = ClassifyScript(script, nRequired, addresses);
+    result.push_back(Pair("type", strType));
+    if (nRequired > 0)
+        result.push_back(Pair("reqSigs", nRequired));
+    if (addresses.size() > 0)
+        result.push_back(Pair("addresses", addresses));
+
+    bool fWithinLimits = ((int)script.size() <= (int)MAX_SCRIPT_SIZE);
+    result.push_back(Pair("withinLimits", fWithinLimits));
+
+    return result;
+}
+
+
+Value setscriptsig(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 3 || params.size() > 3)
+        throw runtime_error(
+            "setscriptsig <tx hex> <input index> <scriptsig hex or elements array>\n"
+            "Set a custom scriptSig on a raw transaction input.\n"
+            "The scriptSig can be raw hex or an array of hex push data.\n"
+            "\nUse this to spend custom (non-standard) scripts by providing\n"
+            "the exact scriptSig needed to satisfy the scriptPubKey.\n"
+            "\nArguments:\n"
+            "1. tx         (string) Hex-encoded raw transaction\n"
+            "2. input      (int)    Input index to modify (0-based)\n"
+            "3. scriptsig  (string or array) Hex scriptSig, or array of hex pushes\n"
+            "\nExamples:\n"
+            "  setscriptsig <txhex> 0 \"03020187\"          Raw scriptSig hex\n"
+            "  setscriptsig <txhex> 0 [\"03\",\"02\"]        Push 0x03 then 0x02");
+
+    vector<unsigned char> txData = ParseHex(params[0].get_str());
+    CDataStream ssData(txData, SER_NETWORK);
+    CTransaction tx;
+    try {
+        ssData >> tx;
+    } catch (std::exception &e) {
+        throw runtime_error("TX decode failed");
+    }
+
+    int nInput = params[1].get_int();
+    if (nInput < 0 || nInput >= (int)tx.vin.size())
+        throw runtime_error(strprintf("Input index %d out of range (tx has %d inputs)", nInput, (int)tx.vin.size()));
+
+    CScript scriptSig;
+    if (params[2].type() == array_type)
+    {
+        const Array& pushes = params[2].get_array();
+        for (unsigned int i = 0; i < pushes.size(); i++)
+        {
+            string elem = pushes[i].get_str();
+            opcodetype opcode;
+            if (GetOpcodeByName(elem, opcode))
+            {
+                scriptSig << opcode;
+            }
+            else
+            {
+                if (!IsHex(elem))
+                    throw runtime_error(strprintf("Push element %d is not valid hex: %s", i, elem.c_str()));
+                vector<unsigned char> data = ParseHex(elem);
+                scriptSig << data;
+            }
+        }
+    }
+    else
+    {
+        string strSig = params[2].get_str();
+
+        bool fAllOpcodesOrHex = false;
+        if (strSig.find(' ') != string::npos)
+        {
+            fAllOpcodesOrHex = true;
+            vector<string> parts;
+            string current;
+            for (unsigned int i = 0; i < strSig.size(); i++)
+            {
+                if (strSig[i] == ' ')
+                {
+                    if (!current.empty()) parts.push_back(current);
+                    current.clear();
+                }
+                else
+                    current += strSig[i];
+            }
+            if (!current.empty()) parts.push_back(current);
+
+            for (unsigned int i = 0; i < parts.size(); i++)
+            {
+                opcodetype opcode;
+                if (GetOpcodeByName(parts[i], opcode))
+                    scriptSig << opcode;
+                else if (IsHex(parts[i]))
+                    scriptSig << ParseHex(parts[i]);
+                else
+                {
+                    fAllOpcodesOrHex = false;
+                    break;
+                }
+            }
+        }
+
+        if (!fAllOpcodesOrHex)
+        {
+            if (!IsHex(strSig))
+                throw runtime_error("scriptSig must be hex-encoded, a space-separated opcode/data string, or an array of hex pushes");
+            vector<unsigned char> sigData = ParseHex(strSig);
+            scriptSig = CScript(sigData.begin(), sigData.end());
+        }
+    }
+
+    tx.vin[nInput].scriptSig = scriptSig;
+
+    CDataStream ss(SER_NETWORK);
+    ss << tx;
+
+    Object result;
+    result.push_back(Pair("hex", HexStr(ss.begin(), ss.end(), false)));
+    result.push_back(Pair("scriptSig", HexStr(scriptSig.begin(), scriptSig.end(), false)));
+    result.push_back(Pair("scriptSigAsm", scriptSig.ToString()));
+    result.push_back(Pair("inputIndex", nInput));
+    return result;
+}
+
+
+Value getscriptsighash(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 3 || params.size() > 4)
+        throw runtime_error(
+            "getscriptsighash <tx hex> <input index> <scriptpubkey hex> [sighashtype]\n"
+            "Compute the signature hash for an input of a raw transaction.\n"
+            "\nThis returns the 32-byte digest that needs to be signed with\n"
+            "the private key for OP_CHECKSIG/OP_CHECKMULTISIG scripts.\n"
+            "\nArguments:\n"
+            "1. tx             (string) Hex-encoded raw transaction\n"
+            "2. input          (int)    Input index (0-based)\n"
+            "3. scriptpubkey   (string) Hex-encoded scriptPubKey being spent\n"
+            "4. sighashtype    (string) Optional: ALL, NONE, SINGLE,\n"
+            "                           ALL|ANYONECANPAY, NONE|ANYONECANPAY, SINGLE|ANYONECANPAY\n"
+            "                           Default: ALL\n"
+            "\nReturns the sighash digest, use with external signing tools.");
+
+    vector<unsigned char> txData = ParseHex(params[0].get_str());
+    CDataStream ssData(txData, SER_NETWORK);
+    CTransaction tx;
+    try {
+        ssData >> tx;
+    } catch (std::exception &e) {
+        throw runtime_error("TX decode failed");
+    }
+
+    int nInput = params[1].get_int();
+    if (nInput < 0 || nInput >= (int)tx.vin.size())
+        throw runtime_error(strprintf("Input index %d out of range (tx has %d inputs)", nInput, (int)tx.vin.size()));
+
+    vector<unsigned char> scriptData = ParseHex(params[2].get_str());
+    CScript scriptPubKey(scriptData.begin(), scriptData.end());
+
+    int nHashType = SIGHASH_ALL;
+    if (params.size() > 3)
+        nHashType = ParseSighashString(params[3].get_str());
+
+    uint256 hash = SignatureHash(scriptPubKey, tx, nInput, nHashType);
+
+    Object result;
+    result.push_back(Pair("sighash", hash.ToString()));
+    result.push_back(Pair("inputIndex", nInput));
+    result.push_back(Pair("hashType", nHashType));
+
+    string strHashName;
+    switch (nHashType & 0x1f)
+    {
+    case SIGHASH_ALL: strHashName = "ALL"; break;
+    case SIGHASH_NONE: strHashName = "NONE"; break;
+    case SIGHASH_SINGLE: strHashName = "SINGLE"; break;
+    default: strHashName = "UNKNOWN"; break;
+    }
+    if (nHashType & SIGHASH_ANYONECANPAY)
+        strHashName += "|ANYONECANPAY";
+    result.push_back(Pair("hashTypeName", strHashName));
+    result.push_back(Pair("scriptPubKeyAsm", scriptPubKey.ToString()));
+    return result;
+}
+
+
+Value decodescriptsig(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 2 || params.size() > 2)
+        throw runtime_error(
+            "decodescriptsig <scriptsig hex> <scriptpubkey hex>\n"
+            "Decode a scriptSig in context of its scriptPubKey.\n"
+            "\nShows each push element with its role based on the script type,\n"
+            "and reports whether the pair would verify.\n"
+            "\nArguments:\n"
+            "1. scriptsig     (string) Hex-encoded scriptSig\n"
+            "2. scriptpubkey  (string) Hex-encoded scriptPubKey");
+
+    vector<unsigned char> sigData = ParseHex(params[0].get_str());
+    CScript scriptSig(sigData.begin(), sigData.end());
+
+    vector<unsigned char> pubData = ParseHex(params[1].get_str());
+    CScript scriptPubKey(pubData.begin(), pubData.end());
+
+    Object result;
+    result.push_back(Pair("scriptSig", HexStr(scriptSig.begin(), scriptSig.end(), false)));
+    result.push_back(Pair("scriptSigAsm", scriptSig.ToString()));
+    result.push_back(Pair("scriptPubKey", HexStr(scriptPubKey.begin(), scriptPubKey.end(), false)));
+    result.push_back(Pair("scriptPubKeyAsm", scriptPubKey.ToString()));
+
+    int nRequired;
+    Array addresses;
+    string strType = ClassifyScript(scriptPubKey, nRequired, addresses);
+    result.push_back(Pair("type", strType));
+
+    Array pushElements;
+    CScript::const_iterator pc = scriptSig.begin();
+    opcodetype opcode;
+    vector<unsigned char> vchData;
+    int nPush = 0;
+    while (scriptSig.GetOp(pc, opcode, vchData))
+    {
+        Object elem;
+        if (opcode <= OP_PUSHDATA4 && vchData.size() > 0)
+        {
+            elem.push_back(Pair("index", nPush));
+            elem.push_back(Pair("hex", HexStr(vchData.begin(), vchData.end(), false)));
+            elem.push_back(Pair("size", (int)vchData.size()));
+
+            if (strType == "pubkeyhash")
+            {
+                if (nPush == 0) elem.push_back(Pair("role", "signature"));
+                else if (nPush == 1) elem.push_back(Pair("role", "pubkey"));
+            }
+            else if (strType == "pubkey")
+            {
+                if (nPush == 0) elem.push_back(Pair("role", "signature"));
+            }
+            else if (strType == "multisig")
+            {
+                if (nPush == 0) elem.push_back(Pair("role", "dummy (OP_0)"));
+                else elem.push_back(Pair("role", strprintf("signature_%d", nPush)));
+            }
+            else if (strType == "hashlock" || strType == "hashlock-sha256")
+            {
+                if (nPush == 0) elem.push_back(Pair("role", "signature"));
+                else if (nPush == 1) elem.push_back(Pair("role", "pubkey"));
+                else if (nPush == 2) elem.push_back(Pair("role", "preimage"));
+            }
+            else
+            {
+                elem.push_back(Pair("role", strprintf("push_%d", nPush)));
+            }
+        }
+        else if (opcode >= OP_1NEGATE && opcode <= OP_16)
+        {
+            elem.push_back(Pair("index", nPush));
+            elem.push_back(Pair("opcode", GetOpName(opcode)));
+            int val = (opcode == OP_1NEGATE) ? -1 : ((int)opcode - (int)(OP_1 - 1));
+            elem.push_back(Pair("value", val));
+
+            if (strType == "multisig" && nPush == 0)
+                elem.push_back(Pair("role", "dummy (OP_0)"));
+            else
+                elem.push_back(Pair("role", strprintf("push_%d", nPush)));
+        }
+        else if (opcode == OP_0)
+        {
+            elem.push_back(Pair("index", nPush));
+            elem.push_back(Pair("opcode", "OP_0"));
+            elem.push_back(Pair("value", 0));
+            if (strType == "multisig" && nPush == 0)
+                elem.push_back(Pair("role", "dummy (required for CHECKMULTISIG bug)"));
+            else
+                elem.push_back(Pair("role", strprintf("push_%d", nPush)));
+        }
+        else
+        {
+            elem.push_back(Pair("index", nPush));
+            elem.push_back(Pair("opcode", GetOpName(opcode)));
+            elem.push_back(Pair("role", "non-push opcode (invalid in scriptSig post-activation)"));
+        }
+        pushElements.push_back(elem);
+        nPush++;
+    }
+    result.push_back(Pair("elements", pushElements));
+    result.push_back(Pair("pushCount", nPush));
+    result.push_back(Pair("isPushOnly", scriptSig.IsPushOnly()));
+
+    return result;
+}
+
+
+Value verifyscriptpair(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 3 || params.size() > 4)
+        throw runtime_error(
+            "verifyscriptpair <tx hex> <input index> <scriptpubkey hex> [flags]\n"
+            "Execute scriptSig + scriptPubKey verification against a real transaction.\n"
+            "\nUnlike validatescript, this tests OP_CHECKSIG/OP_CHECKMULTISIG\n"
+            "because it has the full transaction context.\n"
+            "\nArguments:\n"
+            "1. tx             (string) Hex-encoded signed raw transaction\n"
+            "2. input          (int)    Input index to verify (0-based)\n"
+            "3. scriptpubkey   (string) Hex-encoded scriptPubKey of the output being spent\n"
+            "4. flags          (string) \"exec\" (default) or \"legacy\"\n"
+            "\nReturns whether the script pair verifies successfully.");
+
+    vector<unsigned char> txData = ParseHex(params[0].get_str());
+    CDataStream ssData(txData, SER_NETWORK);
+    CTransaction tx;
+    try {
+        ssData >> tx;
+    } catch (std::exception &e) {
+        throw runtime_error("TX decode failed");
+    }
+
+    int nInput = params[1].get_int();
+    if (nInput < 0 || nInput >= (int)tx.vin.size())
+        throw runtime_error(strprintf("Input index %d out of range (tx has %d inputs)", nInput, (int)tx.vin.size()));
+
+    vector<unsigned char> scriptData = ParseHex(params[2].get_str());
+    CScript scriptPubKey(scriptData.begin(), scriptData.end());
+
+    unsigned int flags = SCRIPT_VERIFY_EXEC;
+    if (params.size() > 3)
+    {
+        string strFlags = params[3].get_str();
+        if (strFlags == "legacy")
+            flags = SCRIPT_VERIFY_NONE;
+        else if (strFlags != "exec")
+            throw runtime_error("Invalid flags. Use \"exec\" or \"legacy\"");
+    }
+
+    const CScript& scriptSig = tx.vin[nInput].scriptSig;
+
+    bool fVerified = VerifyScript(scriptSig, scriptPubKey, tx, nInput, 0, flags);
+
+    Object result;
+    result.push_back(Pair("verified", fVerified));
+    result.push_back(Pair("inputIndex", nInput));
+    result.push_back(Pair("scriptSig", HexStr(scriptSig.begin(), scriptSig.end(), false)));
+    result.push_back(Pair("scriptSigAsm", scriptSig.ToString()));
+    result.push_back(Pair("scriptPubKey", HexStr(scriptPubKey.begin(), scriptPubKey.end(), false)));
+    result.push_back(Pair("scriptPubKeyAsm", scriptPubKey.ToString()));
+
+    int nReq;
+    Array addrs;
+    result.push_back(Pair("type", ClassifyScript(scriptPubKey, nReq, addrs)));
+    result.push_back(Pair("flags", (flags & SCRIPT_VERIFY_EXEC) ? "exec" : "legacy"));
+
+    if (!fVerified)
+    {
+        Array diagnostics;
+
+        if (!scriptSig.IsPushOnly() && (flags & SCRIPT_VERIFY_EXEC))
+            diagnostics.push_back("scriptSig contains non-push opcodes (forbidden post-activation)");
+
+        if (scriptPubKey.size() > MAX_SCRIPT_SIZE)
+            diagnostics.push_back("scriptPubKey exceeds MAX_SCRIPT_SIZE");
+
+        if (scriptSig.size() > MAX_SCRIPT_SIZE)
+            diagnostics.push_back("scriptSig exceeds MAX_SCRIPT_SIZE");
+
+        unsigned int nSigOps = GetSigOpCount(scriptPubKey) + GetSigOpCount(scriptSig);
+        if (nSigOps > 0)
+            diagnostics.push_back(strprintf("Script contains %d sigop(s) - signature verification required", nSigOps));
+
+        vector<vector<unsigned char> > testStack;
+        CScript::const_iterator pc2 = scriptSig.begin();
+        opcodetype op2;
+        vector<unsigned char> vd2;
+        while (scriptSig.GetOp(pc2, op2, vd2))
+        {
+            if (op2 == OP_0)
+                testStack.push_back(vector<unsigned char>());
+            else if (op2 >= OP_1 && op2 <= OP_16)
+                testStack.push_back(vector<unsigned char>(1, (unsigned char)((int)op2 - (int)(OP_1 - 1))));
+            else if (op2 == OP_1NEGATE)
+                testStack.push_back(vector<unsigned char>(1, 0x81));
+            else if (vd2.size() > 0)
+                testStack.push_back(vd2);
+        }
+
+        CTransaction txDummy;
+        txDummy.vin.resize(1);
+        txDummy.vout.resize(1);
+        bool fPubKeyExec = EvalScript(testStack, scriptPubKey, txDummy, 0, 0, flags);
+        if (!fPubKeyExec)
+            diagnostics.push_back("scriptPubKey execution failed with the given stack inputs");
+        else if (testStack.empty())
+            diagnostics.push_back("scriptPubKey execution left empty stack");
+        else
+        {
+            bool fTop = false;
+            const vector<unsigned char>& vchTop = testStack.back();
+            for (unsigned int j = 0; j < vchTop.size(); j++)
+            {
+                if (vchTop[j] != 0) {
+                    if (j == vchTop.size()-1 && vchTop[j] == 0x80) break;
+                    fTop = true;
+                    break;
+                }
+            }
+            if (!fTop)
+                diagnostics.push_back("scriptPubKey execution result is false/zero");
+        }
+
+        if (diagnostics.size() > 0)
+            result.push_back(Pair("diagnostics", diagnostics));
+    }
+
+    return result;
+}
+
+
 Value getindexerinfo(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() != 0)
@@ -3355,6 +3898,11 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("validatescript",        &validatescript),
     make_pair("addpreimage",           &addpreimage),
     make_pair("listpreimages",         &listpreimages),
+    make_pair("buildscript",           &buildscript),
+    make_pair("setscriptsig",          &setscriptsig),
+    make_pair("getscriptsighash",      &getscriptsighash),
+    make_pair("decodescriptsig",       &decodescriptsig),
+    make_pair("verifyscriptpair",      &verifyscriptpair),
     make_pair("getindexerinfo",        &getindexerinfo),
 
     make_pair("getaddresstxids",       &getaddresstxids),
@@ -3873,6 +4421,14 @@ int CommandLineRPC(int argc, char *argv[])
             if (strMethod == "addmultisigaddress"      && n > 0) ConvertTo<boost::int64_t>(params[0]);
             if (strMethod == "addmultisigaddress"      && n > 1) ConvertTo<Array>(params[1]);
             if (strMethod == "validatescript"           && n > 1) ConvertTo<Array>(params[1]);
+            if (strMethod == "buildscript"              && n > 0) ConvertTo<Array>(params[0]);
+            if (strMethod == "setscriptsig"             && n > 1) ConvertTo<boost::int64_t>(params[1]);
+            if (strMethod == "setscriptsig"             && n > 2)
+            {
+                try { ConvertTo<Array>(params[2]); } catch (...) { }
+            }
+            if (strMethod == "getscriptsighash"         && n > 1) ConvertTo<boost::int64_t>(params[1]);
+            if (strMethod == "verifyscriptpair"         && n > 1) ConvertTo<boost::int64_t>(params[1]);
 
             // Execute
             result = CallRPC(strMethod, params);

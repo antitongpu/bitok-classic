@@ -395,6 +395,243 @@ bitokd signrawtransaction "<hex>" '[]' '["<privkey>"]' 'ALL|ANYONECANPAY'
 
 ---
 
+## Custom Script Commands
+
+These RPCs provide the complete toolkit for building, signing, verifying, and interacting with **any** custom script. Combined with `createrawtransaction` (which accepts raw hex scriptPubKey as output keys) and `sendrawtransaction`, they enable a fully self-contained workflow for arbitrary script contracts.
+
+### buildscript
+
+Assembles a script from opcode names and hex data pushes. Eliminates the need to manually hex-encode scripts.
+
+```
+buildscript ["element",...]
+```
+
+Each element is either an opcode name (`"OP_DUP"`, `"OP_HASH160"`, `"OP_CHECKSIG"`, etc.), a hex data string to push (`"deadbeef"`), or a numeric shorthand (`"0"` through `"16"`, `"-1"`).
+
+**Examples:**
+
+P2PKH script:
+```bash
+bitokd buildscript '["OP_DUP","OP_HASH160","89abcdef01234567890123456789012345678901","OP_EQUALVERIFY","OP_CHECKSIG"]'
+```
+
+Arithmetic puzzle (x + y == 5):
+```bash
+bitokd buildscript '["OP_ADD","OP_5","OP_EQUAL"]'
+```
+
+Hashlock:
+```bash
+bitokd buildscript '["OP_HASH160","<20-byte-hash>","OP_EQUALVERIFY","OP_DUP","OP_HASH160","<20-byte-pubkeyhash>","OP_EQUALVERIFY","OP_CHECKSIG"]'
+```
+
+**Returns:**
+```json
+{
+  "hex": "935587",
+  "asm": "OP_ADD OP_5 OP_EQUAL",
+  "size": 3,
+  "type": "arithmetic",
+  "withinLimits": true
+}
+```
+
+---
+
+### setscriptsig
+
+Sets a custom scriptSig on a raw transaction input. This is the key tool for spending custom scripts -- you provide the exact stack data needed to satisfy the scriptPubKey.
+
+```
+setscriptsig <tx hex> <input index> <scriptsig>
+```
+
+The scriptSig can be:
+- **Raw hex**: `"0102030405"` -- bytes are used directly as scriptSig
+- **Array of hex pushes**: `["03","02"]` -- each element is push-encoded into the scriptSig
+- **Space-separated opcode/data string**: `"03 02"` -- parsed as opcodes or hex data
+
+**Examples:**
+
+Spend an arithmetic puzzle (x=3, y=2 to satisfy OP_ADD OP_5 OP_EQUAL):
+```bash
+bitokd setscriptsig "$UNSIGNED_TX" 0 '["03","02"]'
+```
+
+Spend a hashlock with signature + pubkey + preimage:
+```bash
+bitokd setscriptsig "$UNSIGNED_TX" 0 '["<sig>","<pubkey>","<preimage>"]'
+```
+
+**Returns:**
+```json
+{
+  "hex": "0100000001...",
+  "scriptSig": "0103010287",
+  "scriptSigAsm": "3 2",
+  "inputIndex": 0
+}
+```
+
+---
+
+### getscriptsighash
+
+Computes the signature hash (sighash) digest for an input. This is the 32-byte value that must be signed for OP_CHECKSIG to pass.
+
+```
+getscriptsighash <tx hex> <input index> <scriptpubkey hex> [sighashtype]
+```
+
+Use this for external/offline signing workflows, or when building custom scripts that include OP_CHECKSIG.
+
+**Example:**
+```bash
+bitokd getscriptsighash "$UNSIGNED_TX" 0 "76a914...88ac" "ALL"
+```
+
+**Returns:**
+```json
+{
+  "sighash": "a1b2c3d4e5f6...",
+  "inputIndex": 0,
+  "hashType": 1,
+  "hashTypeName": "ALL",
+  "scriptPubKeyAsm": "OP_DUP OP_HASH160 ... OP_EQUALVERIFY OP_CHECKSIG"
+}
+```
+
+---
+
+### decodescriptsig
+
+Decodes a scriptSig in the context of its scriptPubKey, showing the role of each push element.
+
+```
+decodescriptsig <scriptsig hex> <scriptpubkey hex>
+```
+
+**Example:**
+```bash
+bitokd decodescriptsig "483045...0121..." "76a914...88ac"
+```
+
+**Returns:**
+```json
+{
+  "scriptSig": "483045...",
+  "scriptSigAsm": "3045... 04abcd...",
+  "scriptPubKey": "76a914...88ac",
+  "scriptPubKeyAsm": "OP_DUP OP_HASH160 ... OP_EQUALVERIFY OP_CHECKSIG",
+  "type": "pubkeyhash",
+  "elements": [
+    { "index": 0, "hex": "3045...", "size": 72, "role": "signature" },
+    { "index": 1, "hex": "04abcd...", "size": 65, "role": "pubkey" }
+  ],
+  "pushCount": 2,
+  "isPushOnly": true
+}
+```
+
+---
+
+### verifyscriptpair
+
+Executes full scriptSig + scriptPubKey verification against a real transaction. Unlike `validatescript`, this supports OP_CHECKSIG because it has transaction context.
+
+```
+verifyscriptpair <tx hex> <input index> <scriptpubkey hex> [flags]
+```
+
+Flags: `"exec"` (default, post-activation rules) or `"legacy"`.
+
+**Example:**
+```bash
+bitokd verifyscriptpair "$SIGNED_TX" 0 "935587" "exec"
+```
+
+**Returns:**
+```json
+{
+  "verified": true,
+  "inputIndex": 0,
+  "scriptSig": "0103010287",
+  "scriptSigAsm": "3 2",
+  "scriptPubKey": "935587",
+  "scriptPubKeyAsm": "OP_ADD OP_5 OP_EQUAL",
+  "type": "arithmetic",
+  "flags": "exec"
+}
+```
+
+On failure, includes a `diagnostics` array with reasons.
+
+---
+
+## Complete Custom Script Workflows
+
+### Arithmetic Puzzle (no signatures required)
+
+```bash
+# 1. Build the puzzle script: x + y must equal 5
+SCRIPT=$(bitokd buildscript '["OP_ADD","OP_5","OP_EQUAL"]')
+# hex: "935587"
+
+# 2. Send coins to the puzzle
+RAW=$(bitokd createrawtransaction '[{"txid":"<utxo>","vout":0}]' '{"935587":1.0,"<change_addr>":0.499}')
+SIGNED=$(bitokd signrawtransaction "$RAW")
+bitokd sendrawtransaction "<signed_hex>"
+
+# 3. Spend the puzzle (provide x=3, y=2)
+SPEND=$(bitokd createrawtransaction '[{"txid":"<puzzle_txid>","vout":0}]' '{"<dest_addr>":0.999}')
+SPEND=$(bitokd setscriptsig "$SPEND" 0 '["03","02"]')
+bitokd verifyscriptpair "<spend_hex>" 0 "935587"
+bitokd sendrawtransaction "<spend_hex>"
+```
+
+### Hashlock Contract (preimage + signature)
+
+```bash
+# 1. Choose a secret preimage
+PREIMAGE="48656c6c6f576f726c64"  # "HelloWorld"
+
+# 2. Register it with wallet
+bitokd addpreimage "$PREIMAGE"
+# Returns: { hash160: "abc123...", sha256: "def456..." }
+
+# 3. Build the hashlock script
+SCRIPT=$(bitokd buildscript '["OP_HASH160","abc123...","OP_EQUALVERIFY","OP_DUP","OP_HASH160","<your_pubkeyhash>","OP_EQUALVERIFY","OP_CHECKSIG"]')
+
+# 4. Fund the hashlock
+RAW=$(bitokd createrawtransaction '[{"txid":"<utxo>","vout":0}]' '{"<script_hex>":1.0}')
+SIGNED=$(bitokd signrawtransaction "$RAW")
+bitokd sendrawtransaction "<signed_hex>"
+
+# 5. Spend the hashlock (wallet auto-signs if preimage is registered)
+# Or manually: get sighash, sign externally, assemble with setscriptsig
+SPEND=$(bitokd createrawtransaction '[{"txid":"<hashlock_txid>","vout":0}]' '{"<dest>":0.999}')
+HASH=$(bitokd getscriptsighash "$SPEND" 0 "<scriptpubkey_hex>" "ALL")
+# Sign the sighash externally, then:
+bitokd setscriptsig "$SPEND" 0 '["<signature_with_hashtype>","<pubkey>","48656c6c6f576f726c64"]'
+```
+
+### Custom Covenant (OP_CAT + hash verification)
+
+```bash
+# 1. Build a covenant that requires data to concatenate to a known hash
+SCRIPT=$(bitokd buildscript '["OP_CAT","OP_SHA256","<expected_hash>","OP_EQUAL"]')
+
+# 2. Analyze the script
+bitokd analyzescript "<script_hex>"
+
+# 3. Fund it, then spend by providing the two halves
+SPEND=$(bitokd setscriptsig "$UNSIGNED_TX" 0 '["<part1>","<part2>"]')
+bitokd verifyscriptpair "<spend_hex>" 0 "<script_hex>"
+```
+
+---
+
 ## Implementation Notes
 
 - All hex output uses compact format (no spaces between bytes).
@@ -419,7 +656,9 @@ Internal helper functions supporting the RPCs:
 
 - **`IsValidPubKey`** (`rpc.cpp`) -- Validates a public key byte vector has correct format (33-byte compressed or 65-byte uncompressed with correct prefix).
 
+- **`GetOpcodeByName`** (`rpc.cpp`) -- Reverse lookup from opcode name string (e.g., "OP_DUP", "OP_CHECKSIG", "5") to `opcodetype` enum value. Used by `buildscript` and `setscriptsig`.
+
 ## Files Modified
 
-- **`rpc.cpp`** -- Added `ClassifyScript`, `ScriptPubKeyToJSON`, `decoderawtransaction`, `decodescript`, `createrawtransaction`, `signrawtransaction`, `createmultisig`, `addmultisigaddress`, `ParseMultisigScript`, `ParseSighashString`, `IsValidPubKey`. Registered in call table. Added CLI parameter type conversions for JSON array/object arguments. Extended `signrawtransaction` with multisig support, partial signing, sighash type parameter.
+- **`rpc.cpp`** -- Added `ClassifyScript`, `ScriptPubKeyToJSON`, `decoderawtransaction`, `decodescript`, `createrawtransaction`, `signrawtransaction`, `createmultisig`, `addmultisigaddress`, `ParseMultisigScript`, `ParseSighashString`, `IsValidPubKey`, `GetOpcodeByName`, `buildscript`, `setscriptsig`, `getscriptsighash`, `decodescriptsig`, `verifyscriptpair`. Registered in call table. Added CLI parameter type conversions for JSON array/object arguments. Extended `signrawtransaction` with multisig support, partial signing, sighash type parameter.
 - **`script.cpp`** -- Extended `Solver()` with bare multisig template recognition. The signing `Solver()` overload constructs `OP_0 <sig1> ... <sigm>` scriptSig for multisig. `IsMine()` now detects multisig ownership when wallet holds sufficient keys.

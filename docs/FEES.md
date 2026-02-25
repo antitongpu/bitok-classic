@@ -1,8 +1,6 @@
 # Fee Policy
 
-**Status:** Implemented
-**Activation:** Block height 18,000 (`SCRIPT_EXEC_ACTIVATION_HEIGHT`)
-**Activation model:** Block height gating (same gate as Script Exec)
+**Status:** Active since block 18,000
 
 ---
 
@@ -31,30 +29,15 @@ This discourages spam while keeping small payments practical.
 
 ---
 
-## What Changed
+## Active Fee Rules
 
-### Before Block 18,000 (Legacy Behavior)
-
-The original fee rules remain unchanged:
-
-- Base fee: 0.01 BITOK per kilobyte
-- Transactions under 60KB are free if block size is under 80KB
-- Transactions under 3KB are free if block size is under 200KB
-- Any output under 0.01 BITOK forces a minimum 0.01 BITOK fee
-- Block assembly uses unordered iteration (hash-map order)
-- No priority calculation
-
-These rules apply identically on both old and new nodes. Updating before block 18,000 introduces zero behavioral changes.
-
-### After Block 18,000 (Priority-Based Fees)
-
-Three things change at activation:
+Priority-based fees are active (since block 18,000):
 
 1. **Transaction priority is computed using Satoshi's coin-age formula**
 2. **Block assembly is priority-sorted with reserved free space**
 3. **Mempool relay enforces priority-aware fee rules**
 
-Nothing changes at the consensus layer. Block validation does not enforce minimum fees (same as original Bitcoin). Fee rules are policy only -- they govern relay and mining, not block validity.
+Nothing in this system is consensus-enforced. Block validation does not check minimum fees (same as original Bitcoin). Fee rules are policy only -- they govern relay and mining, not block validity.
 
 ---
 
@@ -199,10 +182,6 @@ After block 18,000, new nodes apply priority-aware relay rules. A free transacti
 - The transaction can still reach old miners through old node relay paths
 - If any miner includes it in a block, all nodes accept the block
 - This is a policy difference, not a consensus difference
-
-### Before Block 18,000
-
-New nodes behave identically to old nodes. The activation guard (`nBestHeight >= SCRIPT_EXEC_ACTIVATION_HEIGHT`) routes all code to the legacy path. There is no behavioral difference before activation.
 
 ### Mining Pools
 
