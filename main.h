@@ -89,6 +89,7 @@ bool ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv);
 bool SendMessages(CNode* pto, bool fSendTrickle);
 int64 GetBalance();
 bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CKey& keyRet, int64& nFeeRequiredRet);
+bool CreateStealthTransaction(CScript scriptPubKey, const CScript& scriptOpReturn, int64 nValue, CWalletTx& wtxNew, CKey& keyRet, int64& nFeeRequiredRet);
 bool CommitTransaction(CWalletTx& wtxNew, const CKey& key);
 bool BroadcastTransaction(CWalletTx& wtxNew);
 string SendMoney(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, bool fAskFee=false);

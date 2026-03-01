@@ -418,6 +418,34 @@ public:
         return Write(make_pair(string("preimage"), vchHash), vchPreimage);
     }
 
+    bool WriteStealthAddress(const CStealthAddress& sxAddr)
+    {
+        nWalletDBUpdated++;
+        return Write(make_pair(string("sxaddr"), sxAddr.scan_pubkey), sxAddr);
+    }
+
+    bool WriteStealthScanKey(const vector<unsigned char>& vchScanPub, const CPrivKey& vchScanPriv)
+    {
+        nWalletDBUpdated++;
+        return Write(make_pair(string("sxscan"), vchScanPub), vchScanPriv, false);
+    }
+
+    bool WriteStealthSpendKey(const vector<unsigned char>& vchSpendPub, const CPrivKey& vchSpendPriv)
+    {
+        nWalletDBUpdated++;
+        return Write(make_pair(string("sxspend"), vchSpendPub), vchSpendPriv, false);
+    }
+
+    bool ReadStealthScanKey(const vector<unsigned char>& vchScanPub, CPrivKey& vchScanPriv)
+    {
+        return Read(make_pair(string("sxscan"), vchScanPub), vchScanPriv);
+    }
+
+    bool ReadStealthSpendKey(const vector<unsigned char>& vchSpendPub, CPrivKey& vchSpendPriv)
+    {
+        return Read(make_pair(string("sxspend"), vchSpendPub), vchSpendPriv);
+    }
+
     bool LoadWallet();
 };
 

@@ -21,8 +21,9 @@ JSON-RPC 1.0 interface. Run `./bitokd help` to list all commands from the runnin
 13. [Address Indexer Operations](#address-indexer-operations)
 14. [SPV / Merkle Proof Operations](#spv--merkle-proof-operations)
 15. [Key Management](#key-management)
-16. [Error Handling](#error-handling)
-17. [Client Examples](#client-examples)
+16. [Stealth Address Operations](#stealth-address-operations)
+17. [Error Handling](#error-handling)
+18. [Client Examples](#client-examples)
 
 ---
 
@@ -1214,6 +1215,153 @@ Import a private key into the wallet.
 ```
 
 Triggers a full blockchain rescan if `rescan` is true. This takes time proportional to chain length.
+
+---
+
+## Stealth Address Operations
+
+Stealth addresses implement Satoshi's "key blinding" concept: the receiver publishes a single stealth address, and each payment to it creates a unique one-time destination address that only the receiver can detect and spend. Outside observers cannot link payments to the stealth address or to each other.
+
+Stealth addresses use **compressed public keys** (33 bytes, `0x02`/`0x03` prefix) for both the scan and spend components. This is the only part of Bitok that uses compressed keys -- all other operations use uncompressed keys. Stealth addresses are encoded with the `ok` prefix (e.g., `ok1A2b3C...`).
+
+See [ANON_PRIVACY.md](ANON_PRIVACY.md) for the full cryptographic design and motivation.
+
+### getnewstealthaddress
+
+Generate a new stealth address for receiving unlinkable payments.
+
+**Parameters:**
+1. `label` (string, optional) — label for the address
+
+**Returns:**
+- `stealthaddress` — the new stealth address (share this publicly)
+- `label` — address label
+- `scan_pubkey` — scan public key hex
+- `spend_pubkey` — spend public key hex
+
+```bash
+./bitokd getnewstealthaddress "donations"
+```
+
+```json
+{
+  "stealthaddress": "ok1A2b3C...",
+  "label": "donations",
+  "scan_pubkey": "02abc...",
+  "spend_pubkey": "03def..."
+}
+```
+
+Public keys are returned in compressed format (33 bytes hex, starting with `02` or `03`).
+
+---
+
+### liststealthaddresses
+
+List all stealth addresses in the wallet.
+
+**Parameters:** None
+
+**Returns:** Array of stealth address objects:
+- `stealthaddress` — the stealth address
+- `label` — address label
+- `scan_pubkey` — scan public key hex
+- `spend_pubkey` — spend public key hex
+
+```bash
+./bitokd liststealthaddresses
+```
+
+---
+
+### sendtostealthaddress
+
+Send coins to a stealth address. The recipient can detect the payment, but outside observers cannot link it to the stealth address.
+
+**Parameters:**
+1. `stealthaddress` (string, required) — destination stealth address
+2. `amount` (number, required) — amount in BITOK
+3. `comment` (string, optional) — local memo
+4. `comment-to` (string, optional) — recipient label
+
+**Returns:**
+- `txid` — transaction id
+- `dest_address` — the one-time destination address (unique to this payment)
+- `ephemeral_pubkey` — ephemeral public key hex (embedded in OP_RETURN)
+
+```bash
+./bitokd sendtostealthaddress "ok1A2b3C..." 5.0
+```
+
+The transaction contains two relevant outputs: a standard pay-to-pubkey-hash output to the derived one-time address, and an OP_RETURN output containing the compressed ephemeral public key (34 bytes: 1-byte stealth prefix `0x06` + 33-byte compressed key) so the receiver's wallet can detect the payment.
+
+---
+
+### decodestealthaddress
+
+Decode a stealth address and show its component public keys. Works for any stealth address, not just those in your wallet.
+
+**Parameters:**
+1. `stealthaddress` (string, required)
+
+**Returns:**
+- `valid` — boolean
+- `scan_pubkey` — scan public key hex
+- `spend_pubkey` — spend public key hex
+
+```bash
+./bitokd decodestealthaddress "ok1A2b3C..."
+```
+
+Public keys are returned in compressed format.
+
+---
+
+### exportstealthaddress
+
+Export the private keys (scan and spend secrets) for a stealth address. Use to back up or transfer a stealth address to another wallet.
+
+**Parameters:**
+1. `stealthaddress` (string, required) — stealth address from your wallet
+
+**Returns:**
+- `stealthaddress` — the stealth address
+- `label` — address label
+- `scan_secret` — WIF-encoded scan private key
+- `spend_secret` — WIF-encoded spend private key
+
+```bash
+./bitokd exportstealthaddress "ok1A2b3C..."
+```
+
+**Warning:** Keep both secrets safe. Anyone with these keys can detect and spend stealth payments sent to this address.
+
+---
+
+### importstealthaddress
+
+Import a stealth address from its private keys (as returned by `exportstealthaddress`). The stealth address is reconstructed from the two secrets, written to the wallet, and the blockchain is rescanned to detect past stealth payments.
+
+**Parameters:**
+1. `scan_secret` (string, required) — WIF-encoded scan private key
+2. `spend_secret` (string, required) — WIF-encoded spend private key
+3. `label` (string, optional) — label for the address
+4. `rescan` (boolean, optional, default: true) — whether to rescan the chain for stealth payments
+
+**Returns:**
+- `stealthaddress` — the reconstructed stealth address
+- `label` — address label
+- `scan_pubkey` — scan public key hex
+- `spend_pubkey` — spend public key hex
+- `rescanned` — whether rescan was performed
+
+```bash
+./bitokd importstealthaddress "5KScanSecretWIF..." "5KSpendSecretWIF..." "imported-stealth" true
+```
+
+The stealth address is reconstructed from the secrets using compressed public keys.
+
+Triggers a full blockchain rescan if `rescan` is true. The rescan detects all past stealth payments to this address and adds the derived one-time keys to the wallet. Pass `false` to skip the rescan when importing multiple addresses (then run `rescanwallet` once at the end).
 
 ---
 

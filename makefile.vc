@@ -144,7 +144,7 @@ LIBS_GUI=$(WX_LIBS) $(DB_LIB) $(SSL_LIBS) $(ZLIB_LIB) $(LIBS_WIN) uxtheme.lib
 # ============================================================================
 HEADERS=headers.h strlcpy.h serialize.h uint256.h util.h key.h bignum.h base58.h
 HEADERS=$(HEADERS) script.h bitcoin_db.h db_cxx_compat.h net.h irc.h main.h rpc.h
-HEADERS=$(HEADERS) uibase.h ui.h init.h sha.h yespower.h yespower_hash.h sysendian.h bloom.h merkleblock.h
+HEADERS=$(HEADERS) uibase.h ui.h init.h sha.h yespower.h yespower_hash.h sysendian.h bloom.h merkleblock.h stealth.h
 
 # ============================================================================
 # OBJECT FILES
@@ -171,6 +171,7 @@ OBJS_DAEMON_CORE=$(OBJS_DAEMON_CORE) $(OBJDIR_DAEMON)\irc.obj
 OBJS_DAEMON_CORE=$(OBJS_DAEMON_CORE) $(OBJDIR_DAEMON)\main.obj
 OBJS_DAEMON_CORE=$(OBJS_DAEMON_CORE) $(OBJDIR_DAEMON)\rpc.obj
 OBJS_DAEMON_CORE=$(OBJS_DAEMON_CORE) $(OBJDIR_DAEMON)\init.obj
+OBJS_DAEMON_CORE=$(OBJS_DAEMON_CORE) $(OBJDIR_DAEMON)\stealth.obj
 OBJS_DAEMON_CORE=$(OBJS_DAEMON_CORE) $(OBJDIR)\sha.obj
 
 # All daemon objects
@@ -187,6 +188,7 @@ OBJS_GUI_CORE=$(OBJS_GUI_CORE) $(OBJDIR_GUI)\rpc.obj
 OBJS_GUI_CORE=$(OBJS_GUI_CORE) $(OBJDIR_GUI)\init.obj
 OBJS_GUI_CORE=$(OBJS_GUI_CORE) $(OBJDIR_GUI)\ui.obj
 OBJS_GUI_CORE=$(OBJS_GUI_CORE) $(OBJDIR_GUI)\uibase.obj
+OBJS_GUI_CORE=$(OBJS_GUI_CORE) $(OBJDIR_GUI)\stealth.obj
 OBJS_GUI_CORE=$(OBJS_GUI_CORE) $(OBJDIR)\sha.obj
 
 # All GUI objects
@@ -305,6 +307,9 @@ $(OBJDIR_DAEMON)\rpc.obj: rpc.cpp $(HEADERS)
 $(OBJDIR_DAEMON)\init.obj: init.cpp $(HEADERS)
 	$(CXX) /c $(CXXFLAGS_DAEMON) /Fo$@ init.cpp
 
+$(OBJDIR_DAEMON)\stealth.obj: stealth.cpp $(HEADERS)
+	$(CXX) /c $(CXXFLAGS_DAEMON) /Fo$@ stealth.cpp
+
 # ============================================================================
 # GUI COMPILATION RULES
 # ============================================================================
@@ -337,6 +342,9 @@ $(OBJDIR_GUI)\ui.obj: ui.cpp $(HEADERS)
 
 $(OBJDIR_GUI)\uibase.obj: uibase.cpp $(HEADERS)
 	$(CXX) /c $(CXXFLAGS_GUI) /Fo$@ uibase.cpp
+
+$(OBJDIR_GUI)\stealth.obj: stealth.cpp $(HEADERS)
+	$(CXX) /c $(CXXFLAGS_GUI) /Fo$@ stealth.cpp
 
 # ============================================================================
 # SHARED COMPILATION RULES

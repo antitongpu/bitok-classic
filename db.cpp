@@ -643,6 +643,17 @@ bool CWalletDB::LoadWallet()
             {
                 ssValue >> nFileVersion;
             }
+            else if (strType == "sxaddr")
+            {
+                vector<unsigned char> vchScanPub;
+                ssKey >> vchScanPub;
+                CStealthAddress sxAddr;
+                ssValue >> sxAddr;
+                CRITICAL_BLOCK(cs_stealthAddresses)
+                {
+                    vStealthAddresses.push_back(sxAddr);
+                }
+            }
             else if (strType == "setting")
             {
                 string strKey;
@@ -681,6 +692,7 @@ bool CWalletDB::LoadWallet()
     printf("fMinimizeOnClose = %d\n", fMinimizeOnClose);
     printf("fUseProxy = %d\n", fUseProxy);
     printf("addrProxy = %s\n", addrProxy.ToString().c_str());
+    printf("stealth addresses loaded = %d\n", (int)vStealthAddresses.size());
 
 
     // The transaction fee setting won't be needed for many years to come.

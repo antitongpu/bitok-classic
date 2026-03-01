@@ -150,6 +150,7 @@ using namespace boost;
 #include "bignum.h"
 #include "base58.h"
 #include "script.h"
+#include "stealth.h"
 #include "bitcoin_db.h"
 #include "main.h"
 #include "bloom.h"

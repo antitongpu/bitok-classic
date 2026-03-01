@@ -182,6 +182,26 @@ public:
         return vchPubKey;
     }
 
+    vector<unsigned char> GetCompressedPubKey() const
+    {
+        const EC_GROUP* group = EC_KEY_get0_group(pkey);
+        const EC_POINT* point = EC_KEY_get0_public_key(pkey);
+        if (!point)
+            throw key_error("CKey::GetCompressedPubKey() : no public key");
+        BN_CTX* ctx = BN_CTX_new();
+        if (!ctx)
+            throw key_error("CKey::GetCompressedPubKey() : BN_CTX_new failed");
+        size_t nSize = EC_POINT_point2oct(group, point, POINT_CONVERSION_COMPRESSED, NULL, 0, ctx);
+        vector<unsigned char> vchPubKey(nSize, 0);
+        if (EC_POINT_point2oct(group, point, POINT_CONVERSION_COMPRESSED, &vchPubKey[0], nSize, ctx) != nSize)
+        {
+            BN_CTX_free(ctx);
+            throw key_error("CKey::GetCompressedPubKey() : EC_POINT_point2oct failed");
+        }
+        BN_CTX_free(ctx);
+        return vchPubKey;
+    }
+
     bool Sign(uint256 hash, vector<unsigned char>& vchSig)
     {
         vchSig.clear();

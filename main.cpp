@@ -349,12 +349,94 @@ bool AddToWallet(const CWalletTx& wtxIn)
     return true;
 }
 
+bool CheckStealthTransaction(const CTransaction& tx)
+{
+    vector<unsigned char> vchEphemPub;
+    bool fFoundEphem = false;
+
+    foreach(const CTxOut& txout, tx.vout)
+    {
+        if (ParseStealthOpReturn(txout.scriptPubKey, vchEphemPub))
+        {
+            fFoundEphem = true;
+            break;
+        }
+    }
+
+    if (!fFoundEphem)
+        return false;
+
+    CRITICAL_BLOCK(cs_stealthAddresses)
+    {
+        foreach(const CStealthAddress& sxAddr, vStealthAddresses)
+        {
+            CWalletDB walletdb;
+            CPrivKey vchScanPrivKey;
+            if (!walletdb.ReadStealthScanKey(sxAddr.scan_pubkey, vchScanPrivKey))
+                continue;
+
+            CKey scanKey;
+            if (!scanKey.SetPrivKey(vchScanPrivKey))
+                continue;
+
+            vector<unsigned char> vchScanPriv = scanKey.GetSecret();
+
+            vector<unsigned char> vchDestPubKey;
+            if (!StealthScan(vchScanPriv, sxAddr.spend_pubkey, vchEphemPub, vchDestPubKey))
+                continue;
+
+            uint160 destHash = Hash160(vchDestPubKey);
+
+            foreach(const CTxOut& txout, tx.vout)
+            {
+                uint160 scriptHash = txout.scriptPubKey.GetBitcoinAddressHash160();
+                if (scriptHash == 0)
+                    continue;
+
+                if (scriptHash == destHash)
+                {
+                    CPrivKey vchSpendPrivKey;
+                    if (!walletdb.ReadStealthSpendKey(sxAddr.spend_pubkey, vchSpendPrivKey))
+                        break;
+
+                    CKey spendKey;
+                    if (!spendKey.SetPrivKey(vchSpendPrivKey))
+                        break;
+
+                    vector<unsigned char> vchSpendPriv = spendKey.GetSecret();
+                    vector<unsigned char> vchDestPriv;
+                    if (!StealthSecretSpend(vchScanPriv, vchEphemPub, vchSpendPriv, vchDestPriv))
+                        break;
+
+                    CKey destKey;
+                    if (!destKey.SetSecret(vchDestPriv))
+                        break;
+
+                    if (!AddKey(destKey))
+                        break;
+
+                    mapStealthDestToScan[vchDestPubKey] = make_pair(sxAddr.scan_pubkey, vchEphemPub);
+
+                    printf("stealth: found payment to stealth address %s (dest=%s)\n",
+                           sxAddr.Encoded().substr(0, 16).c_str(),
+                           PubKeyToAddress(vchDestPubKey).c_str());
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+
 bool AddToWalletIfMine(const CTransaction& tx, const CBlock* pblock)
 {
+    CheckStealthTransaction(tx);
+
     if (tx.IsMine() || mapWallet.count(tx.GetHash()))
     {
         CWalletTx wtx(tx);
-        // Get merkle branch if transaction was found in a block
         if (pblock)
             wtx.SetMerkleBranch(pblock);
         return AddToWallet(wtx);
@@ -4502,6 +4584,91 @@ bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CK
     }
     return true;
 }
+
+bool CreateStealthTransaction(CScript scriptPubKey, const CScript& scriptOpReturn,
+                              int64 nValue, CWalletTx& wtxNew, CKey& keyRet,
+                              int64& nFeeRequiredRet)
+{
+    nFeeRequiredRet = 0;
+    CRITICAL_BLOCK(cs_main)
+    {
+        CTxDB txdb("r");
+        CRITICAL_BLOCK(cs_mapWallet)
+        {
+            int64 nFee = nTransactionFee;
+            loop
+            {
+                wtxNew.vin.clear();
+                wtxNew.vout.clear();
+                wtxNew.fFromMe = true;
+                if (nValue < 0)
+                    return false;
+                int64 nValueOut = nValue;
+                int64 nTotalValue = nValue + nFee;
+
+                set<CWalletTx*> setCoins;
+                if (!SelectCoins(nTotalValue, setCoins))
+                    return false;
+                int64 nValueIn = 0;
+                foreach(CWalletTx* pcoin, setCoins)
+                    nValueIn += pcoin->GetCredit();
+
+                bool fChangeFirst = GetRand(2);
+                if (!fChangeFirst)
+                {
+                    wtxNew.vout.push_back(CTxOut(nValueOut, scriptPubKey));
+                    wtxNew.vout.push_back(CTxOut(0, scriptOpReturn));
+                }
+
+                if (nValueIn > nTotalValue)
+                {
+                    if (keyRet.IsNull())
+                        keyRet.MakeNewKey();
+
+                    CScript scriptChange;
+                    scriptChange.SetBitcoinAddress(keyRet.GetPubKey());
+                    wtxNew.vout.push_back(CTxOut(nValueIn - nTotalValue, scriptChange));
+                }
+
+                if (fChangeFirst)
+                {
+                    wtxNew.vout.push_back(CTxOut(nValueOut, scriptPubKey));
+                    wtxNew.vout.push_back(CTxOut(0, scriptOpReturn));
+                }
+
+                foreach(CWalletTx* pcoin, setCoins)
+                    for (int nOut = 0; nOut < pcoin->vout.size(); nOut++)
+                        if (pcoin->vout[nOut].IsMine())
+                            wtxNew.vin.push_back(CTxIn(pcoin->GetHash(), nOut));
+
+                int nIn = 0;
+                foreach(CWalletTx* pcoin, setCoins)
+                    for (int nOut = 0; nOut < pcoin->vout.size(); nOut++)
+                        if (pcoin->vout[nOut].IsMine())
+                            SignSignature(*pcoin, wtxNew, nIn++);
+
+                bool fAllowFree = false;
+                if (nBestHeight + 1 >= SCRIPT_EXEC_ACTIVATION_HEIGHT)
+                {
+                    double dPriority = ComputePriority(wtxNew, txdb, nBestHeight + 1);
+                    fAllowFree = (dPriority >= FREE_PRIORITY_THRESHOLD);
+                }
+                if (nFee < wtxNew.GetMinFee(1, fAllowFree))
+                {
+                    nFee = nFeeRequiredRet = wtxNew.GetMinFee(1, fAllowFree);
+                    continue;
+                }
+
+                wtxNew.AddSupportingTransactions(txdb);
+                wtxNew.fTimeReceivedIsTxTime = true;
+
+                break;
+            }
+        }
+    }
+    return true;
+}
+
 
 // Call after CreateTransaction unless you want to abort
 bool CommitTransaction(CWalletTx& wtxNew, const CKey& key)
