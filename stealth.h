@@ -22,6 +22,8 @@
 static const unsigned char STEALTH_ADDRESS_VERSION = 0x01;
 static const char* STEALTH_ADDRESS_PREFIX = "ok";
 static const unsigned char STEALTH_OP_RETURN_PREFIX = 0x06;
+static const unsigned char STEALTH_SECRET_VERSION = 0x02;
+static const char* STEALTH_SECRET_PREFIX = "SK";
 
 struct CStealthAddress
 {
@@ -67,6 +69,9 @@ bool StealthScan(const vector<unsigned char>& vchScanPriv,
 vector<unsigned char> BuildStealthOpReturn(const vector<unsigned char>& vchEphemPub);
 
 bool ParseStealthOpReturn(const CScript& script, vector<unsigned char>& vchEphemPub);
+
+string EncodeStealthSecret(const vector<unsigned char>& vchScanSecret, const vector<unsigned char>& vchSpendSecret);
+bool DecodeStealthSecret(const string& strEncoded, vector<unsigned char>& vchScanSecret, vector<unsigned char>& vchSpendSecret);
 
 extern vector<CStealthAddress> vStealthAddresses;
 extern map<vector<unsigned char>, pair<vector<unsigned char>, vector<unsigned char> > > mapStealthDestToScan;

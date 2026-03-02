@@ -380,3 +380,41 @@ bool CStealthAddress::IsValid() const
     EC_KEY_free(eckey);
     return fValid;
 }
+
+
+string EncodeStealthSecret(const vector<unsigned char>& vchScanSecret, const vector<unsigned char>& vchSpendSecret)
+{
+    if (vchScanSecret.size() != 32 || vchSpendSecret.size() != 32)
+        return "";
+
+    vector<unsigned char> vchRaw;
+    vchRaw.push_back(STEALTH_SECRET_VERSION);
+    vchRaw.insert(vchRaw.end(), vchScanSecret.begin(), vchScanSecret.end());
+    vchRaw.insert(vchRaw.end(), vchSpendSecret.begin(), vchSpendSecret.end());
+
+    return string(STEALTH_SECRET_PREFIX) + EncodeBase58Check(vchRaw);
+}
+
+
+bool DecodeStealthSecret(const string& strEncoded, vector<unsigned char>& vchScanSecret, vector<unsigned char>& vchSpendSecret)
+{
+    string strPrefix(STEALTH_SECRET_PREFIX);
+    if (strEncoded.size() <= strPrefix.size() ||
+        strEncoded.substr(0, strPrefix.size()) != strPrefix)
+        return false;
+
+    string strBase58 = strEncoded.substr(strPrefix.size());
+    vector<unsigned char> vchRaw;
+    if (!DecodeBase58Check(strBase58, vchRaw))
+        return false;
+
+    if (vchRaw.size() != 1 + 32 + 32)
+        return false;
+
+    if (vchRaw[0] != STEALTH_SECRET_VERSION)
+        return false;
+
+    vchScanSecret.assign(vchRaw.begin() + 1, vchRaw.begin() + 1 + 32);
+    vchSpendSecret.assign(vchRaw.begin() + 1 + 32, vchRaw.end());
+    return true;
+}

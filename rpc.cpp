@@ -891,22 +891,60 @@ Value sendtoaddress(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() < 2 || params.size() > 4)
         throw runtime_error(
-            "sendtoaddress <bitokaddress> <amount> [comment] [comment-to]\n"
+            "sendtoaddress <address> <amount> [comment] [comment-to]\n"
+            "<address> can be a regular address or an ok-address (stealth).\n"
             "<amount> is a real and is rounded to the nearest 0.01");
 
     string strAddress = params[0].get_str();
 
-    // Amount
     if (params[1].get_real() <= 0.0 || params[1].get_real() > 21000000.0)
         throw runtime_error("Invalid amount");
     int64 nAmount = roundint64(params[1].get_real() * 100.00) * CENT;
 
-    // Wallet comments
     CWalletTx wtx;
     if (params.size() > 2 && params[2].type() != null_type && !params[2].get_str().empty())
         wtx.mapValue["message"] = params[2].get_str();
     if (params.size() > 3 && params[3].type() != null_type && !params[3].get_str().empty())
         wtx.mapValue["to"]      = params[3].get_str();
+
+    CStealthAddress sxAddr;
+    if (sxAddr.SetEncoded(strAddress))
+    {
+        vector<unsigned char> vchEphemPub, vchDestPubKey, vchSharedSecret;
+        if (!StealthEphemeral(sxAddr, vchEphemPub, vchDestPubKey, vchSharedSecret))
+            throw runtime_error("Failed to derive stealth destination");
+
+        CScript scriptDestPubKey;
+        scriptDestPubKey.SetBitcoinAddress(vchDestPubKey);
+
+        vector<unsigned char> vchOpReturnData = BuildStealthOpReturn(vchEphemPub);
+        CScript scriptOpReturn;
+        scriptOpReturn << OP_RETURN << vchOpReturnData;
+
+        wtx.mapValue["stealth_address"] = strAddress;
+
+        CKey changeKey;
+        int64 nFeeRequired;
+
+        if (!CreateStealthTransaction(scriptDestPubKey, scriptOpReturn, nAmount, wtx, changeKey, nFeeRequired))
+        {
+            string strError;
+            if (nAmount + nFeeRequired > GetBalance())
+                strError = strprintf("Error: This transaction requires a fee of %s", FormatMoney(nFeeRequired).c_str());
+            else
+                strError = "Error: Transaction creation failed";
+            throw runtime_error(strError);
+        }
+
+        if (!CommitTransaction(wtx, changeKey))
+            throw runtime_error("Error: The transaction was rejected");
+
+        Object result;
+        result.push_back(Pair("txid", wtx.GetHash().ToString()));
+        result.push_back(Pair("dest_address", PubKeyToAddress(vchDestPubKey)));
+        result.push_back(Pair("ephemeral_pubkey", HexStr(vchEphemPub.begin(), vchEphemPub.end(), false)));
+        return result;
+    }
 
     string strError = SendMoneyToBitcoinAddress(strAddress, nAmount, wtx);
     if (strError != "")
@@ -1729,13 +1767,68 @@ Value dumpprivkey(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() != 1)
         throw runtime_error(
-            "dumpprivkey <bitokaddress>\n"
-            "Reveals the private key corresponding to <bitokaddress>.");
+            "dumpprivkey <address>\n"
+            "Reveals the private key corresponding to <address>.\n"
+            "For regular addresses, returns a WIF-encoded private key.\n"
+            "For ok-addresses (stealth), returns an SK... stealth secret.");
 
     string strAddress = params[0].get_str();
+
+    CStealthAddress sxAddr;
+    if (sxAddr.SetEncoded(strAddress))
+    {
+        bool fFound = false;
+        CRITICAL_BLOCK(cs_stealthAddresses)
+        {
+            foreach(const CStealthAddress& sx, vStealthAddresses)
+            {
+                if (sx.scan_pubkey == sxAddr.scan_pubkey && sx.spend_pubkey == sxAddr.spend_pubkey)
+                {
+                    sxAddr.label = sx.label;
+                    fFound = true;
+                    break;
+                }
+            }
+        }
+
+        if (!fFound)
+            throw runtime_error("Stealth address not found in wallet");
+
+        CWalletDB walletdb;
+
+        CPrivKey vchScanPrivKey;
+        if (!walletdb.ReadStealthScanKey(sxAddr.scan_pubkey, vchScanPrivKey))
+            throw runtime_error("Failed to read scan private key");
+
+        CPrivKey vchSpendPrivKey;
+        if (!walletdb.ReadStealthSpendKey(sxAddr.spend_pubkey, vchSpendPrivKey))
+            throw runtime_error("Failed to read spend private key");
+
+        CKey scanKey;
+        if (!scanKey.SetPrivKey(vchScanPrivKey))
+            throw runtime_error("Failed to decode scan private key");
+
+        CKey spendKey;
+        if (!spendKey.SetPrivKey(vchSpendPrivKey))
+            throw runtime_error("Failed to decode spend private key");
+
+        vector<unsigned char> vchScanSecret = scanKey.GetSecret();
+        vector<unsigned char> vchSpendSecret = spendKey.GetSecret();
+
+        string strCombinedKey = EncodeStealthSecret(vchScanSecret, vchSpendSecret);
+        if (strCombinedKey.empty())
+            throw runtime_error("Failed to encode stealth secret");
+
+        Object result;
+        result.push_back(Pair("stealthaddress", sxAddr.Encoded()));
+        result.push_back(Pair("label", sxAddr.label));
+        result.push_back(Pair("stealth_secret", strCombinedKey));
+        return result;
+    }
+
     uint160 hash160;
     if (!AddressToHash160(strAddress, hash160))
-        throw runtime_error("Invalid Bitok address");
+        throw runtime_error("Invalid address");
 
     CKey key;
     CRITICAL_BLOCK(cs_mapKeys)
@@ -1761,8 +1854,9 @@ Value importprivkey(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() < 1 || params.size() > 3)
         throw runtime_error(
-            "importprivkey <bitokprivkey> [label] [rescan=true]\n"
+            "importprivkey <privkey> [label] [rescan=true]\n"
             "Adds a private key (as returned by dumpprivkey) to your wallet.\n"
+            "Accepts WIF keys for regular addresses or SK... keys for stealth addresses.\n"
             "If rescan is true (default), the blockchain will be rescanned for transactions.");
 
     string strSecret = params[0].get_str();
@@ -1772,6 +1866,71 @@ Value importprivkey(const Array& params, bool fHelp)
     bool fRescan = true;
     if (params.size() > 2)
         fRescan = params[2].get_bool();
+
+    vector<unsigned char> vchScanSecret, vchSpendSecret;
+    if (DecodeStealthSecret(strSecret, vchScanSecret, vchSpendSecret))
+    {
+        CKey scanKey;
+        if (!scanKey.SetSecret(vchScanSecret))
+            throw runtime_error("Invalid scan secret key");
+
+        CKey spendKey;
+        if (!spendKey.SetSecret(vchSpendSecret))
+            throw runtime_error("Invalid spend secret key");
+
+        CStealthAddress sxAddr;
+        sxAddr.scan_pubkey = scanKey.GetCompressedPubKey();
+        sxAddr.spend_pubkey = spendKey.GetCompressedPubKey();
+        sxAddr.label = strLabel;
+
+        if (!sxAddr.IsValid())
+            throw runtime_error("Derived stealth address is invalid");
+
+        bool fExists = false;
+        CRITICAL_BLOCK(cs_stealthAddresses)
+        {
+            foreach(const CStealthAddress& sx, vStealthAddresses)
+            {
+                if (sx.scan_pubkey == sxAddr.scan_pubkey && sx.spend_pubkey == sxAddr.spend_pubkey)
+                {
+                    fExists = true;
+                    break;
+                }
+            }
+        }
+
+        if (fExists)
+            throw runtime_error("Stealth address already exists in wallet");
+
+        CWalletDB walletdb;
+        if (!walletdb.WriteStealthAddress(sxAddr))
+            throw runtime_error("Failed to write stealth address to wallet");
+        if (!walletdb.WriteStealthScanKey(sxAddr.scan_pubkey, scanKey.GetPrivKey()))
+            throw runtime_error("Failed to write stealth scan key");
+        if (!walletdb.WriteStealthSpendKey(sxAddr.spend_pubkey, spendKey.GetPrivKey()))
+            throw runtime_error("Failed to write stealth spend key");
+
+        CRITICAL_BLOCK(cs_stealthAddresses)
+        {
+            vStealthAddresses.push_back(sxAddr);
+        }
+
+        printf("[STEALTH] Imported stealth address %s\n", sxAddr.Encoded().substr(0, 16).c_str());
+
+        if (fRescan)
+        {
+            printf("[STEALTH] Rescanning blockchain for stealth payments\n");
+            ScanWalletTransactions(pindexGenesisBlock);
+        }
+
+        Object result;
+        result.push_back(Pair("stealthaddress", sxAddr.Encoded()));
+        result.push_back(Pair("label", strLabel));
+        result.push_back(Pair("scan_pubkey", HexStr(sxAddr.scan_pubkey.begin(), sxAddr.scan_pubkey.end(), false)));
+        result.push_back(Pair("spend_pubkey", HexStr(sxAddr.spend_pubkey.begin(), sxAddr.spend_pubkey.end(), false)));
+        result.push_back(Pair("rescanned", fRescan));
+        return result;
+    }
 
     vector<unsigned char> vchWIF;
     if (!DecodeBase58Check(strSecret, vchWIF))
@@ -3907,67 +4066,6 @@ Value liststealthaddresses(const Array& params, bool fHelp)
 }
 
 
-Value sendtostealthaddress(const Array& params, bool fHelp)
-{
-    if (fHelp || params.size() < 2 || params.size() > 4)
-        throw runtime_error(
-            "sendtostealthaddress <stealthaddress> <amount> [comment] [comment-to]\n"
-            "Send coins to a stealth address. The recipient will be able to\n"
-            "detect the payment but outside observers cannot link it to\n"
-            "the stealth address. <amount> is a real.");
-
-    string strStealthAddr = params[0].get_str();
-    CStealthAddress sxAddr;
-    if (!sxAddr.SetEncoded(strStealthAddr))
-        throw runtime_error("Invalid stealth address");
-
-    if (params[1].get_real() <= 0.0 || params[1].get_real() > 21000000.0)
-        throw runtime_error("Invalid amount");
-    int64 nAmount = roundint64(params[1].get_real() * 100.00) * CENT;
-
-    vector<unsigned char> vchEphemPub, vchDestPubKey, vchSharedSecret;
-    if (!StealthEphemeral(sxAddr, vchEphemPub, vchDestPubKey, vchSharedSecret))
-        throw runtime_error("Failed to derive stealth destination");
-
-    CScript scriptDestPubKey;
-    scriptDestPubKey.SetBitcoinAddress(vchDestPubKey);
-
-    vector<unsigned char> vchOpReturnData = BuildStealthOpReturn(vchEphemPub);
-    CScript scriptOpReturn;
-    scriptOpReturn << OP_RETURN << vchOpReturnData;
-
-    CWalletTx wtx;
-    if (params.size() > 2 && params[2].type() != null_type && !params[2].get_str().empty())
-        wtx.mapValue["message"] = params[2].get_str();
-    if (params.size() > 3 && params[3].type() != null_type && !params[3].get_str().empty())
-        wtx.mapValue["to"] = params[3].get_str();
-
-    wtx.mapValue["stealth_address"] = strStealthAddr;
-
-    CKey changeKey;
-    int64 nFeeRequired;
-
-    if (!CreateStealthTransaction(scriptDestPubKey, scriptOpReturn, nAmount, wtx, changeKey, nFeeRequired))
-    {
-        string strError;
-        if (nAmount + nFeeRequired > GetBalance())
-            strError = strprintf("Error: This transaction requires a fee of %s", FormatMoney(nFeeRequired).c_str());
-        else
-            strError = "Error: Transaction creation failed";
-        throw runtime_error(strError);
-    }
-
-    if (!CommitTransaction(wtx, changeKey))
-        throw runtime_error("Error: The transaction was rejected");
-
-    Object result;
-    result.push_back(Pair("txid", wtx.GetHash().ToString()));
-    result.push_back(Pair("dest_address", PubKeyToAddress(vchDestPubKey)));
-    result.push_back(Pair("ephemeral_pubkey", HexStr(vchEphemPub.begin(), vchEphemPub.end(), false)));
-    return result;
-}
-
-
 Value decodestealthaddress(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() != 1)
@@ -3984,169 +4082,6 @@ Value decodestealthaddress(const Array& params, bool fHelp)
     result.push_back(Pair("valid", true));
     result.push_back(Pair("scan_pubkey", HexStr(sxAddr.scan_pubkey.begin(), sxAddr.scan_pubkey.end(), false)));
     result.push_back(Pair("spend_pubkey", HexStr(sxAddr.spend_pubkey.begin(), sxAddr.spend_pubkey.end(), false)));
-    return result;
-}
-
-
-Value exportstealthaddress(const Array& params, bool fHelp)
-{
-    if (fHelp || params.size() != 1)
-        throw runtime_error(
-            "exportstealthaddress <stealthaddress>\n"
-            "Reveals the private keys (scan and spend) for a stealth address.\n"
-            "The output can be used with importstealthaddress to restore on another wallet.");
-
-    string strAddr = params[0].get_str();
-    CStealthAddress sxAddr;
-    if (!sxAddr.SetEncoded(strAddr))
-        throw runtime_error("Invalid stealth address");
-
-    bool fFound = false;
-    CRITICAL_BLOCK(cs_stealthAddresses)
-    {
-        foreach(const CStealthAddress& sx, vStealthAddresses)
-        {
-            if (sx.scan_pubkey == sxAddr.scan_pubkey && sx.spend_pubkey == sxAddr.spend_pubkey)
-            {
-                sxAddr.label = sx.label;
-                fFound = true;
-                break;
-            }
-        }
-    }
-
-    if (!fFound)
-        throw runtime_error("Stealth address not found in wallet");
-
-    CWalletDB walletdb;
-
-    CPrivKey vchScanPrivKey;
-    if (!walletdb.ReadStealthScanKey(sxAddr.scan_pubkey, vchScanPrivKey))
-        throw runtime_error("Failed to read scan private key");
-
-    CPrivKey vchSpendPrivKey;
-    if (!walletdb.ReadStealthSpendKey(sxAddr.spend_pubkey, vchSpendPrivKey))
-        throw runtime_error("Failed to read spend private key");
-
-    CKey scanKey;
-    if (!scanKey.SetPrivKey(vchScanPrivKey))
-        throw runtime_error("Failed to decode scan private key");
-
-    CKey spendKey;
-    if (!spendKey.SetPrivKey(vchSpendPrivKey))
-        throw runtime_error("Failed to decode spend private key");
-
-    vector<unsigned char> vchScanSecret = scanKey.GetSecret();
-    vector<unsigned char> vchSpendSecret = spendKey.GetSecret();
-
-    vector<unsigned char> vchScanWIF;
-    vchScanWIF.push_back(128);
-    vchScanWIF.insert(vchScanWIF.end(), vchScanSecret.begin(), vchScanSecret.end());
-
-    vector<unsigned char> vchSpendWIF;
-    vchSpendWIF.push_back(128);
-    vchSpendWIF.insert(vchSpendWIF.end(), vchSpendSecret.begin(), vchSpendSecret.end());
-
-    Object result;
-    result.push_back(Pair("stealthaddress", sxAddr.Encoded()));
-    result.push_back(Pair("label", sxAddr.label));
-    result.push_back(Pair("scan_secret", EncodeBase58Check(vchScanWIF)));
-    result.push_back(Pair("spend_secret", EncodeBase58Check(vchSpendWIF)));
-    return result;
-}
-
-
-Value importstealthaddress(const Array& params, bool fHelp)
-{
-    if (fHelp || params.size() < 2 || params.size() > 4)
-        throw runtime_error(
-            "importstealthaddress <scan_secret> <spend_secret> [label] [rescan=true]\n"
-            "Imports a stealth address from its private keys (as returned by exportstealthaddress).\n"
-            "If rescan is true (default), the blockchain will be rescanned for stealth payments.");
-
-    string strScanSecret = params[0].get_str();
-    string strSpendSecret = params[1].get_str();
-    string strLabel;
-    if (params.size() > 2)
-        strLabel = params[2].get_str();
-    bool fRescan = true;
-    if (params.size() > 3)
-        fRescan = params[3].get_bool();
-
-    vector<unsigned char> vchScanWIF;
-    if (!DecodeBase58Check(strScanSecret, vchScanWIF))
-        throw runtime_error("Invalid scan secret key encoding");
-    if (vchScanWIF.size() < 33 || vchScanWIF[0] != 128)
-        throw runtime_error("Invalid scan secret key version");
-
-    vector<unsigned char> vchSpendWIF;
-    if (!DecodeBase58Check(strSpendSecret, vchSpendWIF))
-        throw runtime_error("Invalid spend secret key encoding");
-    if (vchSpendWIF.size() < 33 || vchSpendWIF[0] != 128)
-        throw runtime_error("Invalid spend secret key version");
-
-    vector<unsigned char> vchScanSecret(vchScanWIF.begin() + 1, vchScanWIF.begin() + 33);
-    vector<unsigned char> vchSpendSecret(vchSpendWIF.begin() + 1, vchSpendWIF.begin() + 33);
-
-    CKey scanKey;
-    if (!scanKey.SetSecret(vchScanSecret))
-        throw runtime_error("Invalid scan secret key");
-
-    CKey spendKey;
-    if (!spendKey.SetSecret(vchSpendSecret))
-        throw runtime_error("Invalid spend secret key");
-
-    CStealthAddress sxAddr;
-    sxAddr.scan_pubkey = scanKey.GetCompressedPubKey();
-    sxAddr.spend_pubkey = spendKey.GetCompressedPubKey();
-    sxAddr.label = strLabel;
-
-    if (!sxAddr.IsValid())
-        throw runtime_error("Derived stealth address is invalid");
-
-    bool fExists = false;
-    CRITICAL_BLOCK(cs_stealthAddresses)
-    {
-        foreach(const CStealthAddress& sx, vStealthAddresses)
-        {
-            if (sx.scan_pubkey == sxAddr.scan_pubkey && sx.spend_pubkey == sxAddr.spend_pubkey)
-            {
-                fExists = true;
-                break;
-            }
-        }
-    }
-
-    if (fExists)
-        throw runtime_error("Stealth address already exists in wallet");
-
-    CWalletDB walletdb;
-    if (!walletdb.WriteStealthAddress(sxAddr))
-        throw runtime_error("Failed to write stealth address to wallet");
-    if (!walletdb.WriteStealthScanKey(sxAddr.scan_pubkey, scanKey.GetPrivKey()))
-        throw runtime_error("Failed to write stealth scan key");
-    if (!walletdb.WriteStealthSpendKey(sxAddr.spend_pubkey, spendKey.GetPrivKey()))
-        throw runtime_error("Failed to write stealth spend key");
-
-    CRITICAL_BLOCK(cs_stealthAddresses)
-    {
-        vStealthAddresses.push_back(sxAddr);
-    }
-
-    printf("[STEALTH] Imported stealth address %s\n", sxAddr.Encoded().substr(0, 16).c_str());
-
-    if (fRescan)
-    {
-        printf("[STEALTH] Rescanning blockchain for stealth payments\n");
-        ScanWalletTransactions(pindexGenesisBlock);
-    }
-
-    Object result;
-    result.push_back(Pair("stealthaddress", sxAddr.Encoded()));
-    result.push_back(Pair("label", strLabel));
-    result.push_back(Pair("scan_pubkey", HexStr(sxAddr.scan_pubkey.begin(), sxAddr.scan_pubkey.end(), false)));
-    result.push_back(Pair("spend_pubkey", HexStr(sxAddr.spend_pubkey.begin(), sxAddr.spend_pubkey.end(), false)));
-    result.push_back(Pair("rescanned", fRescan));
     return result;
 }
 
@@ -4222,10 +4157,7 @@ pair<string, rpcfn_type> pCallTable[] =
 
     make_pair("getnewstealthaddress",  &getnewstealthaddress),
     make_pair("liststealthaddresses",  &liststealthaddresses),
-    make_pair("sendtostealthaddress",  &sendtostealthaddress),
     make_pair("decodestealthaddress",  &decodestealthaddress),
-    make_pair("exportstealthaddress", &exportstealthaddress),
-    make_pair("importstealthaddress", &importstealthaddress),
 };
 map<string, rpcfn_type> mapCallTable(pCallTable, pCallTable + sizeof(pCallTable)/sizeof(pCallTable[0]));
 
@@ -4747,8 +4679,6 @@ int CommandLineRPC(int argc, char *argv[])
             }
             if (strMethod == "getscriptsighash"         && n > 1) ConvertTo<boost::int64_t>(params[1]);
             if (strMethod == "verifyscriptpair"         && n > 1) ConvertTo<boost::int64_t>(params[1]);
-            if (strMethod == "sendtostealthaddress"     && n > 1) ConvertTo<double>(params[1]);
-            if (strMethod == "importstealthaddress"     && n > 3) ConvertTo<bool>(params[3]);
             if (strMethod == "importprivkey"            && n > 2) ConvertTo<bool>(params[2]);
 
             // Execute

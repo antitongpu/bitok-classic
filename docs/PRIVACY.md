@@ -84,7 +84,7 @@ The protocol uses Elliptic Curve Diffie-Hellman (ECDH) -- the same cryptographic
 
 ### RPC Commands
 
-Six RPC commands provide full stealth address lifecycle management:
+RPC commands provide full stealth address lifecycle management:
 
 **Creating & Listing:**
 
@@ -94,12 +94,12 @@ Six RPC commands provide full stealth address lifecycle management:
 
 **Sending:**
 
-- `sendtostealthaddress <stealthaddress> <amount> [comment] [comment-to]` -- Send to a stealth address. The transaction will appear on-chain as a normal payment to a fresh one-time address that cannot be linked to the stealth address.
+- `sendtoaddress <address> <amount> [comment] [comment-to]` -- Automatically detects whether the address is a regular address or an ok-address (stealth). For ok-addresses, the transaction will appear on-chain as a normal payment to a fresh one-time address that cannot be linked to the stealth address.
 
 **Backup & Migration:**
 
-- `exportstealthaddress <stealthaddress>` -- Export the scan and spend private keys for a stealth address in your wallet. Returns WIF-encoded secrets that can be used to restore the address on another node.
-- `importstealthaddress <scan_secret> <spend_secret> [label] [rescan=true]` -- Import a stealth address from its private keys (as output by `exportstealthaddress`). The stealth address is reconstructed from the two secrets, written to the wallet, and (by default) the entire blockchain is rescanned to detect any past stealth payments. Pass `false` as the last argument to skip the rescan.
+- `dumpprivkey <address>` -- Works for both regular and stealth addresses. For ok-addresses, returns the `SK...` combined stealth secret.
+- `importprivkey <privkey> [label] [rescan=true]` -- Works for both WIF keys and `SK...` stealth secrets. For stealth secrets, reconstructs the stealth address and imports it into the wallet.
 
 ### Address Format
 
@@ -120,17 +120,17 @@ Stealth address keys (scan key, spend key) are persisted in the wallet database 
 
 ### Backup & Portability
 
-Stealth addresses can be backed up and migrated between wallets using `exportstealthaddress` and `importstealthaddress`, mirroring the `dumpprivkey`/`importprivkey` workflow for regular addresses. This is important because a stealth address is not just a single key -- it consists of a scan keypair and a spend keypair. Both must be preserved to recover the ability to detect and spend stealth payments.
+Stealth addresses use the same `dumpprivkey`/`importprivkey` commands as regular addresses. The commands auto-detect the address/key type and route accordingly. Although a stealth address internally uses two keypairs (scan and spend), the export produces a single combined key (`SK...` format) for simplicity.
 
 **Backup workflow:**
 
 1. `liststealthaddresses` -- see all your stealth addresses.
-2. `exportstealthaddress <addr>` -- for each one, export the two WIF secrets.
-3. Store the secrets securely (same precautions as regular private key backups).
+2. `dumpprivkey <ok-address>` -- for each one, export the combined `SK...` key.
+3. Store the key securely (same precautions as regular private key backups).
 
 **Restore workflow:**
 
-1. `importstealthaddress <scan_secret> <spend_secret> "label"` -- import on the new wallet.
+1. `importprivkey "SK..." "label"` -- import on the new wallet.
 2. The rescan runs automatically and finds all historical stealth payments.
 3. `liststealthaddresses` -- verify the address was imported correctly.
 
