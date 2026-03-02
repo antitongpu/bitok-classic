@@ -1466,6 +1466,15 @@ bool CWalletDB::LoadWallet()
                 ssValue >> vchPreimage;
                 mapHashPreimages[vchHash] = vchPreimage;
             }
+            else if (strType == "sxaddr")
+            {
+                CStealthAddress sxAddr;
+                ssValue >> sxAddr;
+                CRITICAL_BLOCK(cs_stealthAddresses)
+                {
+                    vStealthAddresses.push_back(sxAddr);
+                }
+            }
         }
         pcursor->close();
     }
