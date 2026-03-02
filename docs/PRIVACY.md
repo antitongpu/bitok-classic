@@ -1,7 +1,5 @@
-# Bitok Privacy: Finishing What Satoshi Started
-
-**Author: Elvis Jedusor**
-
+# **Native Blind**
+# Bitok Privacy Protocol: Finishing What Satoshi Started
 ---
 
 ## Why I Built This
@@ -45,7 +43,7 @@ I am building Bitok to fix this. Not by changing the consensus rules that Satosh
 
 ---
 
-## What I Have Built: Stealth Addresses (Key Blinding)
+## What I Have Built: Stealth ok-Addresses (Key Blinding)
 
 This is the first feature, and it is the one Satoshi described most concretely. I have implemented it exactly as he envisioned: blinded variations of a public key, where each payment goes to a unique, unlinkable address, and only the intended recipient can detect and spend the funds.
 
@@ -112,6 +110,26 @@ Stealth addresses use a distinct encoding to avoid confusion with regular Bitok 
 
 Example: `ok1A2b3C4d...` (the full address is ~80 characters)
 
+### Deterministic Change Keys
+
+When spending from a stealth-derived address, the wallet needs a change address. Using a random new key would be dangerous -- if the wallet were restored from the SK secret alone, that random change key would be lost, and the change funds with it.
+
+Bitok solves this with **deterministic change key derivation**. When a stealth transaction needs change:
+
+1. The wallet identifies which stealth address owns the input being spent.
+2. It derives a change key from the spend secret using a deterministic scheme: `change_priv = SHA256d(spend_secret || "stealth_change" || index)`, where `index` is an incrementing counter per stealth address.
+3. The change output pays to this derived key. Since the key can be re-derived from the spend secret alone, it survives backup/restore.
+4. The counter (`index`) is persisted in the wallet database and advanced after each use.
+
+During an SK import with rescan, the wallet recovers these change keys by:
+
+1. Scanning the entire blockchain to collect all on-chain address hashes.
+2. Deriving change keys sequentially (index 0, 1, 2, ...) and checking which ones appear on-chain.
+3. Importing each found change key into the wallet and advancing the counter.
+4. Stopping at the first index that has no on-chain match.
+
+This ensures that all change from previous stealth spends is recovered automatically.
+
 ### Wallet Integration
 
 Stealth scanning is integrated directly into the wallet's transaction processing pipeline. When new blocks arrive or during a wallet rescan, every transaction is checked for stealth payments. Detected payments are automatically added to the wallet with the derived private key. There is no manual step required.
@@ -131,8 +149,13 @@ Stealth addresses use the same `dumpprivkey`/`importprivkey` commands as regular
 **Restore workflow:**
 
 1. `importprivkey "SK..." "label"` -- import on the new wallet.
-2. The rescan runs automatically and finds all historical stealth payments.
+2. The rescan runs automatically in two passes:
+   - **Pass 1**: Scans the blockchain for stealth payments (ECDH detection) while simultaneously collecting all on-chain address hashes.
+   - **Between passes**: Recovers deterministic change keys by checking derived addresses against the collected on-chain set.
+   - **Pass 2**: Re-scans to pick up transactions belonging to the recovered change keys.
 3. `liststealthaddresses` -- verify the address was imported correctly.
+
+Note: Importing an SK key takes roughly twice as long as importing a regular private key, because it requires two full blockchain scans instead of one.
 
 ---
 

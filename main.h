@@ -80,7 +80,7 @@ bool AddKey(const CKey& key);
 vector<unsigned char> GenerateNewKey();
 bool AddToWallet(const CWalletTx& wtxIn);
 void WalletUpdateSpent(const COutPoint& prevout);
-int ScanWalletTransactions(CBlockIndex* pindexStart, boost::function<bool (int, int, int)> progressCallback = 0);
+int ScanWalletTransactions(CBlockIndex* pindexStart, boost::function<bool (int, int, int)> progressCallback = 0, set<uint160>* psetOnChainAddresses = NULL);
 void ReacceptWalletTransactions();
 bool LoadBlockIndex(bool fAllowNew=true);
 void PrintBlockTree();

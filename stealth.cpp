@@ -6,6 +6,7 @@
 
 vector<CStealthAddress> vStealthAddresses;
 map<vector<unsigned char>, pair<vector<unsigned char>, vector<unsigned char> > > mapStealthDestToScan;
+map<vector<unsigned char>, uint32_t> mapStealthChangeIndex;
 CCriticalSection cs_stealthAddresses;
 
 
@@ -416,5 +417,85 @@ bool DecodeStealthSecret(const string& strEncoded, vector<unsigned char>& vchSca
 
     vchScanSecret.assign(vchRaw.begin() + 1, vchRaw.begin() + 1 + 32);
     vchSpendSecret.assign(vchRaw.begin() + 1 + 32, vchRaw.end());
+    return true;
+}
+
+
+bool StealthDeriveChangeKey(const vector<unsigned char>& vchSpendSecret,
+                            uint32_t nIndex,
+                            vector<unsigned char>& vchChangePrivKey,
+                            vector<unsigned char>& vchChangePubKey)
+{
+    if (vchSpendSecret.size() != 32)
+        return false;
+
+    static const string strDomain("stealth_change");
+
+    vector<unsigned char> vchData;
+    vchData.insert(vchData.end(), vchSpendSecret.begin(), vchSpendSecret.end());
+    vchData.insert(vchData.end(), strDomain.begin(), strDomain.end());
+    vchData.push_back((nIndex >>  0) & 0xFF);
+    vchData.push_back((nIndex >>  8) & 0xFF);
+    vchData.push_back((nIndex >> 16) & 0xFF);
+    vchData.push_back((nIndex >> 24) & 0xFF);
+
+    uint256 hash;
+    SHA256(&vchData[0], vchData.size(), (unsigned char*)&hash);
+    uint256 hash2;
+    SHA256((unsigned char*)&hash, sizeof(hash), (unsigned char*)&hash2);
+
+    vchChangePrivKey.resize(32);
+    memcpy(&vchChangePrivKey[0], &hash2, 32);
+
+    CKey changeKey;
+    if (!changeKey.SetSecret(vchChangePrivKey))
+        return false;
+
+    vchChangePubKey = changeKey.GetPubKey();
+    return true;
+}
+
+
+bool ScanStealthChangeKeys(const vector<unsigned char>& vchSpendSecret, const set<uint160>& setOnChainAddresses)
+{
+    CKey spendKey;
+    if (!spendKey.SetSecret(vchSpendSecret))
+        return false;
+
+    vector<unsigned char> vchSpendPub = spendKey.GetCompressedPubKey();
+
+    int nRecovered = 0;
+    for (uint32_t nIndex = 0; ; nIndex++)
+    {
+        vector<unsigned char> vchChangePriv, vchChangePub;
+        if (!StealthDeriveChangeKey(vchSpendSecret, nIndex, vchChangePriv, vchChangePub))
+            return false;
+
+        uint160 hash160 = Hash160(vchChangePub);
+
+        if (setOnChainAddresses.count(hash160) == 0)
+        {
+            CRITICAL_BLOCK(cs_stealthAddresses)
+            {
+                mapStealthChangeIndex[vchSpendPub] = nIndex;
+            }
+            CWalletDB().WriteStealthChangeIndex(vchSpendPub, nIndex);
+            printf("stealth: change key scan complete - recovered %d keys, next index %u\n",
+                   nRecovered, nIndex);
+            break;
+        }
+
+        CKey changeKey;
+        if (!changeKey.SetSecret(vchChangePriv))
+            return false;
+
+        if (!AddKey(changeKey))
+            return false;
+
+        nRecovered++;
+        printf("stealth: recovered change key at index %u (addr=%s)\n",
+               nIndex, PubKeyToAddress(vchChangePub).c_str());
+    }
+
     return true;
 }

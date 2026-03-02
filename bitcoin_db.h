@@ -446,6 +446,24 @@ public:
         return Read(make_pair(string("sxspend"), vchSpendPub), vchSpendPriv);
     }
 
+    bool WriteStealthChangeIndex(const vector<unsigned char>& vchSpendPub, uint32_t nIndex)
+    {
+        nWalletDBUpdated++;
+        return Write(make_pair(string("sxchgidx"), vchSpendPub), nIndex);
+    }
+
+    bool ReadStealthChangeIndex(const vector<unsigned char>& vchSpendPub, uint32_t& nIndex)
+    {
+        return Read(make_pair(string("sxchgidx"), vchSpendPub), nIndex);
+    }
+
+    bool WriteStealthDestMap(const vector<unsigned char>& vchDestPub,
+                             const pair<vector<unsigned char>, vector<unsigned char> >& scanAndEphem)
+    {
+        nWalletDBUpdated++;
+        return Write(make_pair(string("sxdest"), vchDestPub), scanAndEphem);
+    }
+
     bool LoadWallet();
 };
 

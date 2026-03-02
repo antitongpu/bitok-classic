@@ -191,12 +191,10 @@ Send BITOK to an address. Wallet selects inputs automatically and handles fees. 
 Recent wallet transactions.
 
 **Parameters:**
-1. `label` (string, optional) — filter by label, `"*"` for all (default: `"*"`)
-2. `count` (integer, optional) — number of transactions (default: 10)
-3. `from` (integer, optional) — skip this many (default: 0)
+1. `count` (integer, optional) — number of transactions to return (default: 10)
+2. `includegenerated` (boolean, optional) — include mining/generation transactions (default: true)
 
 **Returns:** Array of transaction objects:
-- `account` — label
 - `address` — address involved
 - `category` — `"send"` | `"receive"` | `"generate"`
 - `amount` — BITOK amount (negative for sends)
@@ -204,10 +202,10 @@ Recent wallet transactions.
 - `confirmations` — confirmation count
 - `txid` — transaction id
 - `time` — Unix timestamp
-- `timereceived` — when first seen
 
 ```bash
-./bitokd listtransactions "*" 20 0
+./bitokd listtransactions 20
+./bitokd listtransactions 10 false
 ```
 
 ---
@@ -1231,7 +1229,14 @@ Import a private key into the wallet. Auto-detects the key type: WIF keys import
 ./bitokd importprivkey "SK5a7b9c..." "imported-stealth" true
 ```
 
-Triggers a full blockchain rescan if `rescan` is true. This takes time proportional to chain length.
+**Rescan behavior:**
+- For WIF keys: triggers a single full blockchain rescan.
+- For `SK...` keys: triggers a two-pass rescan:
+  1. **Pass 1**: Scans the blockchain for stealth payments (ECDH detection) while collecting all on-chain address hashes.
+  2. **Between passes**: Recovers deterministic change keys by deriving addresses from the spend secret and checking which ones appear on-chain.
+  3. **Pass 2**: Re-scans to pick up transactions belonging to the recovered change keys.
+
+SK import takes roughly twice as long as a regular key import due to the two blockchain passes.
 
 ---
 
@@ -1245,16 +1250,16 @@ Stealth addresses are fully integrated into the standard wallet commands -- no d
 
 **Sending:**
 
-- `sendtoaddress <address> <amount> [comment] [comment-to]` -- Automatically detects whether the address is a regular address or an ok-address (stealth). For ok-addresses, the transaction will appear on-chain as a normal payment to a fresh one-time address that cannot be linked to the stealth address.
+- `sendtoaddress <address> <amount> [comment] [comment-to]` -- Automatically detects whether the address is a regular address or an ok-address (stealth). For ok-addresses, the transaction will appear on-chain as a normal payment to a fresh one-time address that cannot be linked to the stealth address. Change outputs use deterministic change keys derived from the stealth spend secret, ensuring they can be recovered from the SK backup alone.
 
 **Backup & Migration:**
 
 - `dumpprivkey <address>` -- Works for both regular and stealth addresses. For ok-addresses, returns the `SK...` combined stealth secret.
-- `importprivkey <privkey> [label] [rescan=true]` -- Works for both WIF keys and `SK...` stealth secrets. For stealth secrets, reconstructs the stealth address and imports it into the wallet.
+- `importprivkey <privkey> [label] [rescan=true]` -- Works for both WIF keys and `SK...` stealth secrets. For stealth secrets, reconstructs the stealth address, recovers deterministic change keys, and imports everything into the wallet. The SK rescan uses two blockchain passes (see `importprivkey` above for details).
 
 The commands below are specific to stealth address creation and inspection.
 
-See [ANON_PRIVACY.md](ANON_PRIVACY.md) for the full cryptographic design and motivation.
+See [PRIVACY.md](PRIVACY.md) for the full cryptographic design and motivation.
 
 ### getnewstealthaddress
 

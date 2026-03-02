@@ -416,6 +416,7 @@ bool CheckStealthTransaction(const CTransaction& tx)
                         break;
 
                     mapStealthDestToScan[vchDestPubKey] = make_pair(sxAddr.scan_pubkey, vchEphemPub);
+                    walletdb.WriteStealthDestMap(vchDestPubKey, make_pair(sxAddr.scan_pubkey, vchEphemPub));
 
                     printf("stealth: found payment to stealth address %s (dest=%s)\n",
                            sxAddr.Encoded().substr(0, 16).c_str(),
@@ -444,7 +445,7 @@ bool AddToWalletIfMine(const CTransaction& tx, const CBlock* pblock)
     return true;
 }
 
-int ScanWalletTransactions(CBlockIndex* pindexStart, boost::function<bool (int, int, int)> progressCallback)
+int ScanWalletTransactions(CBlockIndex* pindexStart, boost::function<bool (int, int, int)> progressCallback, set<uint160>* psetOnChainAddresses)
 {
     int nFound = 0;
     int nTotalBlocks = nBestHeight - (pindexStart ? pindexStart->nHeight : 0) + 1;
@@ -463,6 +464,15 @@ int ScanWalletTransactions(CBlockIndex* pindexStart, boost::function<bool (int, 
         block.ReadFromDisk(pindex, true);
         foreach(CTransaction& tx, block.vtx)
         {
+            if (psetOnChainAddresses)
+            {
+                foreach(const CTxOut& txout, tx.vout)
+                {
+                    uint160 h = txout.scriptPubKey.GetBitcoinAddressHash160();
+                    if (h != 0)
+                        psetOnChainAddresses->insert(h);
+                }
+            }
             if (tx.IsMine() && !mapWallet.count(tx.GetHash()))
                 nFound++;
             AddToWalletIfMine(tx, &block);
@@ -4486,6 +4496,71 @@ bool SelectCoins(int64 nTargetValue, set<CWalletTx*>& setCoinsRet)
 }
 
 
+static bool GetStealthChangeKeyForInputs(const set<CWalletTx*>& setCoins, CKey& changeKeyOut)
+{
+    CRITICAL_BLOCK(cs_stealthAddresses)
+    CRITICAL_BLOCK(cs_mapKeys)
+    {
+        foreach(CWalletTx* pcoin, setCoins)
+        {
+            for (int nOut = 0; nOut < pcoin->vout.size(); nOut++)
+            {
+                if (!pcoin->vout[nOut].IsMine())
+                    continue;
+
+                uint160 hash160 = pcoin->vout[nOut].scriptPubKey.GetBitcoinAddressHash160();
+                if (hash160 == 0)
+                    continue;
+
+                if (!mapPubKeys.count(hash160))
+                    continue;
+
+                vector<unsigned char> vchPubKey = mapPubKeys[hash160];
+
+                if (!mapStealthDestToScan.count(vchPubKey))
+                    continue;
+
+                vector<unsigned char> vchScanPub = mapStealthDestToScan[vchPubKey].first;
+
+                foreach(const CStealthAddress& sxAddr, vStealthAddresses)
+                {
+                    if (sxAddr.scan_pubkey != vchScanPub)
+                        continue;
+
+                    CWalletDB walletdb;
+                    CPrivKey vchSpendPrivKey;
+                    if (!walletdb.ReadStealthSpendKey(sxAddr.spend_pubkey, vchSpendPrivKey))
+                        continue;
+
+                    CKey spendKey;
+                    if (!spendKey.SetPrivKey(vchSpendPrivKey))
+                        continue;
+
+                    vector<unsigned char> vchSpendSecret = spendKey.GetSecret();
+
+                    uint32_t nIndex = 0;
+                    if (mapStealthChangeIndex.count(sxAddr.spend_pubkey))
+                        nIndex = mapStealthChangeIndex[sxAddr.spend_pubkey];
+
+                    vector<unsigned char> vchChangePriv, vchChangePub;
+                    if (!StealthDeriveChangeKey(vchSpendSecret, nIndex, vchChangePriv, vchChangePub))
+                        continue;
+
+                    if (!changeKeyOut.SetSecret(vchChangePriv))
+                        continue;
+
+                    mapStealthChangeIndex[sxAddr.spend_pubkey] = nIndex + 1;
+                    walletdb.WriteStealthChangeIndex(sxAddr.spend_pubkey, nIndex + 1);
+
+                    printf("stealth: using deterministic change key index %u for stealth address %s\n",
+                           nIndex, sxAddr.Encoded().substr(0, 16).c_str());
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 
 
 bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CKey& keyRet, int64& nFeeRequiredRet)
@@ -4524,18 +4599,12 @@ bool CreateTransaction(CScript scriptPubKey, int64 nValue, CWalletTx& wtxNew, CK
                 // Fill a vout back to self with any change
                 if (nValueIn > nTotalValue)
                 {
-                    // Note: We use a new key here to keep it from being obvious which side is the change.
-                    //  The drawback is that by not reusing a previous key, the change may be lost if a
-                    //  backup is restored, if the backup doesn't have the new private key for the change.
-                    //  If we reused the old key, it would be possible to add code to look for and
-                    //  rediscover unknown transactions that were written with keys of ours to recover
-                    //  post-backup change.
-
-                    // New private key
                     if (keyRet.IsNull())
-                        keyRet.MakeNewKey();
+                    {
+                        if (!GetStealthChangeKeyForInputs(setCoins, keyRet))
+                            keyRet.MakeNewKey();
+                    }
 
-                    // Fill a vout to ourself, using same address type as the payment
                     CScript scriptChange;
                     if (scriptPubKey.GetBitcoinAddressHash160() != 0)
                         scriptChange.SetBitcoinAddress(keyRet.GetPubKey());
@@ -4623,7 +4692,10 @@ bool CreateStealthTransaction(CScript scriptPubKey, const CScript& scriptOpRetur
                 if (nValueIn > nTotalValue)
                 {
                     if (keyRet.IsNull())
-                        keyRet.MakeNewKey();
+                    {
+                        if (!GetStealthChangeKeyForInputs(setCoins, keyRet))
+                            keyRet.MakeNewKey();
+                    }
 
                     CScript scriptChange;
                     scriptChange.SetBitcoinAddress(keyRet.GetPubKey());

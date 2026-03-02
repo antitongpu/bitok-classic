@@ -654,6 +654,25 @@ bool CWalletDB::LoadWallet()
                     vStealthAddresses.push_back(sxAddr);
                 }
             }
+            else if (strType == "sxchgidx")
+            {
+                vector<unsigned char> vchSpendPub;
+                ssKey >> vchSpendPub;
+                uint32_t nIndex;
+                ssValue >> nIndex;
+                CRITICAL_BLOCK(cs_stealthAddresses)
+                {
+                    mapStealthChangeIndex[vchSpendPub] = nIndex;
+                }
+            }
+            else if (strType == "sxdest")
+            {
+                vector<unsigned char> vchDestPub;
+                ssKey >> vchDestPub;
+                pair<vector<unsigned char>, vector<unsigned char> > scanAndEphem;
+                ssValue >> scanAndEphem;
+                mapStealthDestToScan[vchDestPub] = scanAndEphem;
+            }
             else if (strType == "setting")
             {
                 string strKey;

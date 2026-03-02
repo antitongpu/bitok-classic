@@ -73,8 +73,16 @@ bool ParseStealthOpReturn(const CScript& script, vector<unsigned char>& vchEphem
 string EncodeStealthSecret(const vector<unsigned char>& vchScanSecret, const vector<unsigned char>& vchSpendSecret);
 bool DecodeStealthSecret(const string& strEncoded, vector<unsigned char>& vchScanSecret, vector<unsigned char>& vchSpendSecret);
 
+bool StealthDeriveChangeKey(const vector<unsigned char>& vchSpendSecret,
+                            uint32_t nIndex,
+                            vector<unsigned char>& vchChangePrivKey,
+                            vector<unsigned char>& vchChangePubKey);
+
+bool ScanStealthChangeKeys(const vector<unsigned char>& vchSpendSecret, const set<uint160>& setOnChainAddresses);
+
 extern vector<CStealthAddress> vStealthAddresses;
 extern map<vector<unsigned char>, pair<vector<unsigned char>, vector<unsigned char> > > mapStealthDestToScan;
+extern map<vector<unsigned char>, uint32_t> mapStealthChangeIndex;
 extern CCriticalSection cs_stealthAddresses;
 
 #endif

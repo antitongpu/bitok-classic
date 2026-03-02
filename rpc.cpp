@@ -1919,7 +1919,14 @@ Value importprivkey(const Array& params, bool fHelp)
 
         if (fRescan)
         {
-            printf("[STEALTH] Rescanning blockchain for stealth payments\n");
+            set<uint160> setOnChainAddresses;
+            printf("[STEALTH] Rescanning blockchain for stealth payments (collecting address index)\n");
+            ScanWalletTransactions(pindexGenesisBlock, 0, &setOnChainAddresses);
+
+            printf("[STEALTH] Scanning for deterministic change keys\n");
+            ScanStealthChangeKeys(vchSpendSecret, setOnChainAddresses);
+
+            printf("[STEALTH] Re-scanning to pick up change transactions\n");
             ScanWalletTransactions(pindexGenesisBlock);
         }
 
