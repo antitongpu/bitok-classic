@@ -116,7 +116,8 @@ protected:
     void OnListItemActivatedProductsSent(wxListEvent& event);
     void OnListItemActivatedOrdersSent(wxListEvent& event);
     void OnListItemActivatedOrdersReceived(wxListEvent& event);
-	
+    void OnButtonCopyOk(wxCommandEvent& event);
+
 public:
     /** Constructor */
     CMainFrame(wxWindow* parent);
@@ -126,9 +127,8 @@ public:
     enum
     {
         ALL = 0,
-        SENTRECEIVED = 1,
-        SENT = 2,
-        RECEIVED = 3,
+        SENT = 1,
+        RECEIVED = 2,
     };
     int nPage;
     wxListCtrl* m_listCtrl;
@@ -148,6 +148,7 @@ public:
     bool InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex=-1);
     void RefreshListCtrl();
     void RefreshStatusColumn();
+    void SetOkAddressIfEmpty(const string& strAddr);
 };
 
 
@@ -227,11 +228,6 @@ protected:
 public:
     /** Constructor */
     CSendDialog(wxWindow* parent, const wxString& strAddress="");
-
-    // Custom
-    bool fEnabledPrev;
-    string strFromSave;
-    string strMessageSave;
 };
 
 
@@ -304,6 +300,7 @@ public:
     {
         SENDING = 0,
         RECEIVING = 1,
+        OKADDRESSES = 2,
     };
     int nPage;
     wxListCtrl* m_listCtrl;
@@ -312,6 +309,7 @@ public:
     wxString GetSelectedAddress();
     wxString GetSelectedSendingAddress();
     wxString GetSelectedReceivingAddress();
+    wxString GetSelectedOkAddress();
     bool CheckIfMine(const string& strAddress, const string& strTitle);
 };
 

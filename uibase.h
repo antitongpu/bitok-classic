@@ -42,6 +42,7 @@
 #include <wx/scrolwin.h>
 #include <wx/statbmp.h>
 #include <wx/gauge.h>
+#include <wx/statline.h>
 
 ///////////////////////////////////////////////////////////////////////////
 
@@ -72,35 +73,40 @@
 #define wxID_BUTTONGENERATECOINS 1024
 #define wxID_BUTTONSETTINGS 1025
 #define wxID_BUTTONEXPORTKEY 1026
+#define wxID_PANELOKADDRESSES 1027
+#define wxID_LISTCTRLOKADDRESSES 1028
+#define wxID_BUTTONCOPYOK 1029
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class CMainFrameBase
 ///////////////////////////////////////////////////////////////////////////////
-class CMainFrameBase : public wxFrame 
+class CMainFrameBase : public wxFrame
 {
 	private:
-	
+
 	protected:
 		wxMenuBar* m_menubar;
 		wxMenu* m_menuFile;
 		wxMenu* m_menuHelp;
 		wxToolBar* m_toolBar;
-		
-		wxStaticText* m_staticText32;
+
+		wxStaticText* m_staticTextAddrLabel;
 		wxButton* m_buttonNew;
 		wxButton* m_buttonCopy;
-		
+
+		wxStaticText* m_staticTextOkLabel;
+		wxTextCtrl* m_textCtrlOkAddress;
+		wxButton* m_buttonCopyOk;
+
 		wxStaticText* m_staticText41;
 		wxStaticText* m_staticTextBalance;
-		
+
 		wxChoice* m_choiceFilter;
 		wxNotebook* m_notebook;
 		wxPanel* m_panel9;
-		wxPanel* m_panel91;
 		wxPanel* m_panel92;
 		wxPanel* m_panel93;
-		
-		// Virtual event handlers, overide them in your derived class
+
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnIconize( wxIconizeEvent& event ){ event.Skip(); }
 		virtual void OnIdle( wxIdleEvent& event ){ event.Skip(); }
@@ -122,23 +128,23 @@ class CMainFrameBase : public wxFrame
 		virtual void OnSetFocusAddress( wxFocusEvent& event ){ event.Skip(); }
 		virtual void OnButtonNew( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonCopy( wxCommandEvent& event ){ event.Skip(); }
+		virtual void OnButtonCopyOk( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnNotebookPageChanged( wxNotebookEvent& event ){ event.Skip(); }
 		virtual void OnListColBeginDrag( wxListEvent& event ){ event.Skip(); }
 		virtual void OnListItemActivated( wxListEvent& event ){ event.Skip(); }
 		virtual void OnPaintListCtrl( wxPaintEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
 		wxMenu* m_menuOptions;
 		wxStatusBar* m_statusBar;
 		wxTextCtrl* m_textCtrlAddress;
 		wxListCtrl* m_listCtrlAll;
-		wxListCtrl* m_listCtrlSentReceived;
 		wxListCtrl* m_listCtrlSent;
 		wxListCtrl* m_listCtrlReceived;
 		CMainFrameBase( wxWindow* parent, wxWindowID id = wxID_MAINFRAME, const wxString& title = _("Bitok"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 820,560 ), long style = wxDEFAULT_FRAME_STYLE|wxRESIZE_BORDER|wxTAB_TRAVERSAL );
 		~CMainFrameBase();
-	
+
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -152,29 +158,28 @@ class CTxDetailsDialogBase : public wxDialog
 		wxHtmlWindow* m_htmlWin;
 		wxButton* m_buttonOK;
 
-		// Virtual event handlers, overide them in your derived class
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnButtonOK( wxCommandEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
 		CTxDetailsDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Transaction Details"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 680,500 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER );
 		~CTxDetailsDialogBase();
-	
+
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class COptionsDialogBase
 ///////////////////////////////////////////////////////////////////////////////
-class COptionsDialogBase : public wxDialog 
+class COptionsDialogBase : public wxDialog
 {
 	private:
-	
+
 	protected:
 		wxListBox* m_listBox;
 		wxScrolledWindow* m_scrolledWindow;
 		wxPanel* m_panelMain;
-		
+
 		wxStaticText* m_staticText32;
 		wxStaticText* m_staticText31;
 		wxTextCtrl* m_textCtrlTransactionFee;
@@ -185,20 +190,19 @@ class COptionsDialogBase : public wxDialog
 		wxCheckBox* m_checkBoxMinimizeToTray;
 		wxCheckBox* m_checkBoxMinimizeOnClose;
 		wxCheckBox* m_checkBoxUseProxy;
-		
+
 		wxStaticText* m_staticTextProxyIP;
 		wxTextCtrl* m_textCtrlProxyIP;
 		wxStaticText* m_staticTextProxyPort;
 		wxTextCtrl* m_textCtrlProxyPort;
 		wxPanel* m_panelTest2;
-		
+
 		wxStaticText* m_staticText321;
 		wxStaticText* m_staticText69;
 		wxButton* m_buttonOK;
 		wxButton* m_buttonCancel;
 		wxButton* m_buttonApply;
 
-		// Virtual event handlers, overide them in your derived class
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnListBox( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnKillFocusTransactionFee( wxFocusEvent& event ){ event.Skip(); }
@@ -209,12 +213,12 @@ class COptionsDialogBase : public wxDialog
 		virtual void OnButtonOK( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonCancel( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonApply( wxCommandEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
 		COptionsDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Options"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 600,420 ), long style = wxDEFAULT_DIALOG_STYLE );
 		~COptionsDialogBase();
-	
+
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -234,30 +238,29 @@ class CAboutDialogBase : public wxDialog
 
 		wxButton* m_buttonOK;
 
-		// Virtual event handlers, overide them in your derived class
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnButtonOK( wxCommandEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
 		wxStaticText* m_staticTextVersion;
 		CAboutDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("About Bitok"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 580,460 ), long style = wxDEFAULT_DIALOG_STYLE );
 		~CAboutDialogBase();
-	
+
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class CSendDialogBase
 ///////////////////////////////////////////////////////////////////////////////
-class CSendDialogBase : public wxDialog 
+class CSendDialogBase : public wxDialog
 {
 	private:
-	
+
 	protected:
-		
-		
+
+
 		wxStaticText* m_staticTextInstructions;
-		
+
 		wxStaticBitmap* m_bitmapCheckMark;
 		wxStaticText* m_staticText36;
 		wxTextCtrl* m_textCtrlAddress;
@@ -265,19 +268,10 @@ class CSendDialogBase : public wxDialog
 		wxButton* m_buttonAddress;
 		wxStaticText* m_staticText19;
 		wxTextCtrl* m_textCtrlAmount;
-		wxStaticText* m_staticText20;
-		wxChoice* m_choiceTransferType;
-		
-		
-		wxStaticText* m_staticTextFrom;
-		wxTextCtrl* m_textCtrlFrom;
-		wxStaticText* m_staticTextMessage;
-		wxTextCtrl* m_textCtrlMessage;
-		
+
 		wxButton* m_buttonSend;
 		wxButton* m_buttonCancel;
-		
-		// Virtual event handlers, overide them in your derived class
+
 		virtual void OnKeyDown( wxKeyEvent& event ){ event.Skip(); }
 		virtual void OnTextAddress( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonPaste( wxCommandEvent& event ){ event.Skip(); }
@@ -285,60 +279,58 @@ class CSendDialogBase : public wxDialog
 		virtual void OnKillFocusAmount( wxFocusEvent& event ){ event.Skip(); }
 		virtual void OnButtonSend( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonCancel( wxCommandEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
-		CSendDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Send Coins"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 720,380 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER );
+		CSendDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Send Coins"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 700,280 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER );
 		~CSendDialogBase();
-	
+
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class CSendingDialogBase
 ///////////////////////////////////////////////////////////////////////////////
-class CSendingDialogBase : public wxDialog 
+class CSendingDialogBase : public wxDialog
 {
 	private:
-	
+
 	protected:
 		wxStaticText* m_staticTextSending;
 		wxTextCtrl* m_textCtrlStatus;
-		
+
 		wxButton* m_buttonOK;
 		wxButton* m_buttonCancel;
-		
-		// Virtual event handlers, overide them in your derived class
+
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnPaint( wxPaintEvent& event ){ event.Skip(); }
 		virtual void OnButtonOK( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonCancel( wxCommandEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
 		CSendingDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Sending..."), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 480,180 ), long style = wxDEFAULT_DIALOG_STYLE );
 		~CSendingDialogBase();
-	
+
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class CYourAddressDialogBase
 ///////////////////////////////////////////////////////////////////////////////
-class CYourAddressDialogBase : public wxDialog 
+class CYourAddressDialogBase : public wxDialog
 {
 	private:
-	
+
 	protected:
-		
+
 		wxStaticText* m_staticText45;
 		wxListCtrl* m_listCtrl;
-		
+
 		wxButton* m_buttonRename;
 		wxButton* m_buttonNew;
 		wxButton* m_buttonCopy;
 		wxButton* m_buttonOK;
 		wxButton* m_buttonCancel;
-		
-		// Virtual event handlers, overide them in your derived class
+
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnListEndLabelEdit( wxListEvent& event ){ event.Skip(); }
 		virtual void OnListItemActivated( wxListEvent& event ){ event.Skip(); }
@@ -348,33 +340,37 @@ class CYourAddressDialogBase : public wxDialog
 		virtual void OnButtonCopy( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonOK( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonCancel( wxCommandEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
 		CYourAddressDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Your Bitok Addresses"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 680,450 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER );
 		~CYourAddressDialogBase();
-	
+
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class CAddressBookDialogBase
 ///////////////////////////////////////////////////////////////////////////////
-class CAddressBookDialogBase : public wxDialog 
+class CAddressBookDialogBase : public wxDialog
 {
 	private:
-	
+
 	protected:
 		wxNotebook* m_notebook;
 		wxPanel* m_panelSending;
-		
+
 		wxStaticText* m_staticText55;
 		wxListCtrl* m_listCtrlSending;
 		wxPanel* m_panelReceiving;
-		
+
 		wxStaticText* m_staticText45;
-		
+
 		wxListCtrl* m_listCtrlReceiving;
-		
+
+		wxPanel* m_panelOkAddresses;
+		wxStaticText* m_staticTextOkInfo;
+		wxListCtrl* m_listCtrlOkAddresses;
+
 		wxButton* m_buttonDelete;
 		wxButton* m_buttonCopy;
 		wxButton* m_buttonExport;
@@ -382,7 +378,6 @@ class CAddressBookDialogBase : public wxDialog
 		wxButton* m_buttonNew;
 		wxButton* m_buttonOK;
 
-		// Virtual event handlers, overide them in your derived class
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnNotebookPageChanged( wxNotebookEvent& event ){ event.Skip(); }
 		virtual void OnListEndLabelEdit( wxListEvent& event ){ event.Skip(); }
@@ -395,44 +390,43 @@ class CAddressBookDialogBase : public wxDialog
 		virtual void OnButtonNew( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonOK( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonCancel( wxCommandEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
 		wxButton* m_buttonCancel;
 		CAddressBookDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Address Book"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 700,480 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER );
 		~CAddressBookDialogBase();
-	
+
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Class CGetTextFromUserDialogBase
 ///////////////////////////////////////////////////////////////////////////////
-class CGetTextFromUserDialogBase : public wxDialog 
+class CGetTextFromUserDialogBase : public wxDialog
 {
 	private:
-	
+
 	protected:
-		
+
 		wxStaticText* m_staticTextMessage1;
 		wxTextCtrl* m_textCtrl1;
 		wxStaticText* m_staticTextMessage2;
 		wxTextCtrl* m_textCtrl2;
-		
-		
+
+
 		wxButton* m_buttonOK;
 		wxButton* m_buttonCancel;
-		
-		// Virtual event handlers, overide them in your derived class
+
 		virtual void OnClose( wxCloseEvent& event ){ event.Skip(); }
 		virtual void OnKeyDown( wxKeyEvent& event ){ event.Skip(); }
 		virtual void OnButtonOK( wxCommandEvent& event ){ event.Skip(); }
 		virtual void OnButtonCancel( wxCommandEvent& event ){ event.Skip(); }
-		
-	
+
+
 	public:
 		CGetTextFromUserDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = wxEmptyString, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 500,170 ), long style = wxDEFAULT_DIALOG_STYLE );
 		~CGetTextFromUserDialogBase();
-	
+
 };
 
 #endif //__uibase__

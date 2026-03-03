@@ -289,10 +289,6 @@ CMainFrame::CMainFrame(wxWindow* parent) : CMainFrameBase(parent)
         m_panel9->SetBackgroundColour(panelBg);
         m_panel9->SetForegroundColour(fgColour);
     }
-    if (m_panel91) {
-        m_panel91->SetBackgroundColour(panelBg);
-        m_panel91->SetForegroundColour(fgColour);
-    }
     if (m_panel92) {
         m_panel92->SetBackgroundColour(panelBg);
         m_panel92->SetForegroundColour(fgColour);
@@ -348,7 +344,7 @@ CMainFrame::CMainFrame(wxWindow* parent) : CMainFrameBase(parent)
     nDateWidth += 5;
     dResize -= 0.01;
 #endif
-    wxListCtrl* pplistCtrl[] = {m_listCtrlAll, m_listCtrlSentReceived, m_listCtrlSent, m_listCtrlReceived};
+    wxListCtrl* pplistCtrl[] = {m_listCtrlAll, m_listCtrlSent, m_listCtrlReceived};
     foreach(wxListCtrl* p, pplistCtrl)
     {
         p->InsertColumn(0, "",               wxLIST_FORMAT_LEFT,  dResize * 0);
@@ -390,6 +386,24 @@ CMainFrame::CMainFrame(wxWindow* parent) : CMainFrameBase(parent)
     if (CWalletDB("r").ReadDefaultKey(vchPubKey))
         m_textCtrlAddress->SetValue(PubKeyToAddress(vchPubKey));
 
+    // Fill ok-address text box
+    CRITICAL_BLOCK(cs_stealthAddresses)
+    {
+        if (!vStealthAddresses.empty())
+        {
+            for (unsigned int i = 0; i < vStealthAddresses.size(); i++)
+            {
+                if (vStealthAddresses[i].label == "default")
+                {
+                    m_textCtrlOkAddress->SetValue(vStealthAddresses[i].Encoded());
+                    break;
+                }
+            }
+            if (m_textCtrlOkAddress->GetValue().empty())
+                m_textCtrlOkAddress->SetValue(vStealthAddresses[0].Encoded());
+        }
+    }
+
     // Fill listctrl with wallet transactions
     RefreshListCtrl();
 }
@@ -409,13 +423,6 @@ void CMainFrame::OnNotebookPageChanged(wxNotebookEvent& event)
     {
         m_listCtrl = m_listCtrlAll;
         fShowGenerated = true;
-        fShowSent = true;
-        fShowReceived = true;
-    }
-    else if (nPage == SENTRECEIVED)
-    {
-        m_listCtrl = m_listCtrlSentReceived;
-        fShowGenerated = false;
         fShowSent = true;
         fShowReceived = true;
     }
@@ -708,34 +715,52 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
         }
         else
         {
-            // Received by Bitok Address
             if (!fShowReceived)
                 return false;
-            foreach(const CTxOut& txout, wtx.vout)
+            if (mapValue.count("stealth_address") && !mapValue["stealth_address"].empty())
             {
-                if (txout.IsMine())
+                strDescription = _STR("Received via ok-address");
+                string strSxLabel;
+                CRITICAL_BLOCK(cs_stealthAddresses)
                 {
-                    vector<unsigned char> vchPubKey;
-                    if (ExtractPubKey(txout.scriptPubKey, true, vchPubKey))
+                    for (unsigned int i = 0; i < vStealthAddresses.size(); i++)
                     {
-                        CRITICAL_BLOCK(cs_mapAddressBook)
+                        if (vStealthAddresses[i].Encoded() == mapValue["stealth_address"])
                         {
-                            //strDescription += _("Received payment to ");
-                            //strDescription += _("Received with address ");
-                            strDescription += _STR("From: unknown, Received with: ");
-                            string strAddress = PubKeyToAddress(vchPubKey);
-                            map<string, string>::iterator mi = mapAddressBook.find(strAddress);
-                            if (mi != mapAddressBook.end() && !(*mi).second.empty())
-                            {
-                                string strLabel = (*mi).second;
-                                strDescription += strAddress.substr(0,12) + "... ";
-                                strDescription += "(" + strLabel + ")";
-                            }
-                            else
-                                strDescription += strAddress;
+                            strSxLabel = vStealthAddresses[i].label;
+                            break;
                         }
                     }
-                    break;
+                }
+                if (!strSxLabel.empty())
+                    strDescription += " (" + strSxLabel + ")";
+            }
+            else
+            {
+                foreach(const CTxOut& txout, wtx.vout)
+                {
+                    if (txout.IsMine())
+                    {
+                        vector<unsigned char> vchPubKey;
+                        if (ExtractPubKey(txout.scriptPubKey, true, vchPubKey))
+                        {
+                            CRITICAL_BLOCK(cs_mapAddressBook)
+                            {
+                                strDescription += _STR("Received with: ");
+                                string strAddress = PubKeyToAddress(vchPubKey);
+                                map<string, string>::iterator mi = mapAddressBook.find(strAddress);
+                                if (mi != mapAddressBook.end() && !(*mi).second.empty())
+                                {
+                                    string strLabel = (*mi).second;
+                                    strDescription += strAddress.substr(0,12) + "... ";
+                                    strDescription += "(" + strLabel + ")";
+                                }
+                                else
+                                    strDescription += strAddress;
+                            }
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -755,7 +780,11 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
 
         bool fAllToMe = true;
         foreach(const CTxOut& txout, wtx.vout)
+        {
+            if (txout.nValue == 0 && txout.scriptPubKey.size() > 0 && txout.scriptPubKey[0] == OP_RETURN)
+                continue;
             fAllToMe = fAllToMe && txout.IsMine();
+        }
 
         if (fAllFromMe && fAllToMe)
         {
@@ -787,6 +816,9 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
                 if (txout.IsMine())
                     continue;
 
+                if (txout.nValue == 0 && txout.scriptPubKey.size() > 0 && txout.scriptPubKey[0] == OP_RETURN)
+                    continue;
+
                 string strAddress;
                 if (!mapValue["to"].empty())
                 {
@@ -801,11 +833,35 @@ bool CMainFrame::InsertTransaction(const CWalletTx& wtx, bool fNew, int nIndex)
                         strAddress = Hash160ToAddress(hash160);
                 }
 
-                string strDescription = _STR("To: ");
-                CRITICAL_BLOCK(cs_mapAddressBook)
-                    if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
-                        strDescription += mapAddressBook[strAddress] + " ";
-                strDescription += strAddress;
+                string strDescription;
+                if (mapValue.count("stealth_address") && !mapValue["stealth_address"].empty())
+                {
+                    strDescription = _STR("To ok-address: ");
+                    string strSxLabel;
+                    CRITICAL_BLOCK(cs_stealthAddresses)
+                    {
+                        for (unsigned int i = 0; i < vStealthAddresses.size(); i++)
+                        {
+                            if (vStealthAddresses[i].Encoded() == mapValue["stealth_address"])
+                            {
+                                strSxLabel = vStealthAddresses[i].label;
+                                break;
+                            }
+                        }
+                    }
+                    if (!strSxLabel.empty())
+                        strDescription += strSxLabel;
+                    else
+                        strDescription += mapValue["stealth_address"].substr(0, 24) + "...";
+                }
+                else
+                {
+                    strDescription = _STR("To: ");
+                    CRITICAL_BLOCK(cs_mapAddressBook)
+                        if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
+                            strDescription += mapAddressBook[strAddress] + " ";
+                    strDescription += strAddress;
+                }
                 if (!mapValue["message"].empty())
                 {
                     if (!strDescription.empty())
@@ -1296,34 +1352,179 @@ void CMainFrame::OnMouseEventsAddress(wxMouseEvent& event)
     fOnSetFocusAddress = false;
 }
 
+static bool CreateNewOkAddress(wxWindow* parent, const string& strLabel)
+{
+    CStealthAddress sxAddr;
+    CKey scanKey, spendKey;
+    if (!GenerateStealthAddress(sxAddr, scanKey, spendKey))
+    {
+        wxMessageBox(_("Failed to generate ok-address."),
+            _("New ok-Address"), wxOK | wxICON_ERROR);
+        return false;
+    }
+
+    sxAddr.label = strLabel;
+
+    CWalletDB walletdb;
+    if (!walletdb.WriteStealthAddress(sxAddr) ||
+        !walletdb.WriteStealthScanKey(sxAddr.scan_pubkey, scanKey.GetPrivKey()) ||
+        !walletdb.WriteStealthSpendKey(sxAddr.spend_pubkey, spendKey.GetPrivKey()))
+    {
+        wxMessageBox(_("Failed to save ok-address to wallet."),
+            _("New ok-Address"), wxOK | wxICON_ERROR);
+        return false;
+    }
+
+    CRITICAL_BLOCK(cs_stealthAddresses)
+    {
+        vStealthAddresses.push_back(sxAddr);
+    }
+
+    if (pframeMain)
+        pframeMain->SetOkAddressIfEmpty(sxAddr.Encoded());
+
+    return true;
+}
+
+static bool ImportOkAddressSecret(wxWindow* parent, const string& strSecret, const string& strLabel)
+{
+    vector<unsigned char> vchScanSecret, vchSpendSecret;
+    if (!DecodeStealthSecret(strSecret, vchScanSecret, vchSpendSecret))
+    {
+        wxMessageBox(_("Invalid ok-address secret format."),
+            _("Import ok-Address"), wxOK | wxICON_ERROR);
+        return false;
+    }
+
+    CKey scanKey;
+    if (!scanKey.SetSecret(vchScanSecret))
+    {
+        wxMessageBox(_("Invalid scan secret key."),
+            _("Import ok-Address"), wxOK | wxICON_ERROR);
+        return false;
+    }
+
+    CKey spendKey;
+    if (!spendKey.SetSecret(vchSpendSecret))
+    {
+        wxMessageBox(_("Invalid spend secret key."),
+            _("Import ok-Address"), wxOK | wxICON_ERROR);
+        return false;
+    }
+
+    CStealthAddress sxAddr;
+    sxAddr.scan_pubkey = scanKey.GetCompressedPubKey();
+    sxAddr.spend_pubkey = spendKey.GetCompressedPubKey();
+    sxAddr.label = strLabel;
+
+    if (!sxAddr.IsValid())
+    {
+        wxMessageBox(_("Derived ok-address is invalid."),
+            _("Import ok-Address"), wxOK | wxICON_ERROR);
+        return false;
+    }
+
+    bool fExists = false;
+    CRITICAL_BLOCK(cs_stealthAddresses)
+    {
+        foreach(const CStealthAddress& sx, vStealthAddresses)
+        {
+            if (sx.scan_pubkey == sxAddr.scan_pubkey && sx.spend_pubkey == sxAddr.spend_pubkey)
+            {
+                fExists = true;
+                break;
+            }
+        }
+    }
+
+    if (fExists)
+    {
+        wxMessageBox(_("This ok-address already exists in your wallet."),
+            _("Import ok-Address"), wxOK | wxICON_INFORMATION);
+        return false;
+    }
+
+    CWalletDB walletdb;
+    if (!walletdb.WriteStealthAddress(sxAddr) ||
+        !walletdb.WriteStealthScanKey(sxAddr.scan_pubkey, scanKey.GetPrivKey()) ||
+        !walletdb.WriteStealthSpendKey(sxAddr.spend_pubkey, spendKey.GetPrivKey()))
+    {
+        wxMessageBox(_("Failed to save ok-address to wallet."),
+            _("Import ok-Address"), wxOK | wxICON_ERROR);
+        return false;
+    }
+
+    CRITICAL_BLOCK(cs_stealthAddresses)
+    {
+        vStealthAddresses.push_back(sxAddr);
+    }
+
+    if (pframeMain)
+        pframeMain->SetOkAddressIfEmpty(sxAddr.Encoded());
+
+    printf("[STEALTH] Imported stealth address %s\n", sxAddr.Encoded().substr(0, 16).c_str());
+
+    {
+        wxProgressDialog progressDlg(
+            _("Rescanning Blockchain"),
+            _("Scanning for stealth payments..."),
+            100,
+            parent,
+            wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_SMOOTH | wxPD_ELAPSED_TIME | wxPD_ESTIMATED_TIME);
+        set<uint160> setOnChainAddresses;
+        int nFound = ScanWalletTransactions(pindexGenesisBlock,
+            bind(RescanProgressCallback, &progressDlg, _1, _2, _3),
+            &setOnChainAddresses);
+        progressDlg.Update(100);
+        if (nFound > 0)
+            wxMessageBox(strprintf(_("Rescan complete. Found %d transaction(s).").mb_str(), nFound),
+                _("Import ok-Address"), wxOK | wxICON_INFORMATION);
+    }
+
+    return true;
+}
+
 void CMainFrame::OnButtonNew(wxCommandEvent& event)
 {
     wxArrayString choices;
-    choices.Add(_("Create New Address"));
-    choices.Add(_("Import Private Key"));
+    choices.Add(_("Create New Bitok Address"));
+    choices.Add(_("Create New ok-Address"));
+    choices.Add(_("Import Private Key (Bitok Address)"));
+    choices.Add(_("Import ok-Address Secret"));
     wxSingleChoiceDialog choiceDlg(this,
         _("What would you like to do?"),
-        _("New Receiving Address"),
+        _("New Address"),
         choices);
     choiceDlg.SetSelection(0);
     if (choiceDlg.ShowModal() != wxID_OK)
         return;
 
-    string strName;
-    string strAddress;
+    int nChoice = choiceDlg.GetSelection();
 
-    if (choiceDlg.GetSelection() == 0)
+    if (nChoice == 0)
     {
         CGetTextFromUserDialog dialog(this,
-            _STR("New Receiving Address"),
+            _STR("New Bitok Address"),
             _STR("It's good policy to use a new address for each payment you receive.\n\nLabel"),
             "");
         if (!dialog.ShowModal())
             return;
-        strName = dialog.GetValue();
-        strAddress = PubKeyToAddress(GenerateNewKey());
+        string strName = dialog.GetValue();
+        string strAddress = PubKeyToAddress(GenerateNewKey());
+        SetAddressBookName(strAddress, strName);
+        SetDefaultReceivingAddress(strAddress);
     }
-    else
+    else if (nChoice == 1)
+    {
+        CGetTextFromUserDialog dialog(this,
+            _STR("New ok-Address"),
+            _STR("Label"),
+            "");
+        if (!dialog.ShowModal())
+            return;
+        CreateNewOkAddress(this, dialog.GetValue());
+    }
+    else if (nChoice == 2)
     {
         CGetTextFromUserDialog dialog(this,
             _STR("Import Private Key"),
@@ -1334,7 +1535,7 @@ void CMainFrame::OnButtonNew(wxCommandEvent& event)
         if (!dialog.ShowModal())
             return;
         string strSecret = dialog.GetValue1();
-        strName = dialog.GetValue2();
+        string strName = dialog.GetValue2();
 
         vector<unsigned char> vchWIF;
         if (!DecodeBase58Check(strSecret, vchWIF) || vchWIF.size() < 33 || vchWIF[0] != 128)
@@ -1357,7 +1558,7 @@ void CMainFrame::OnButtonNew(wxCommandEvent& event)
                 _("Import Private Key"), wxOK | wxICON_ERROR);
             return;
         }
-        strAddress = PubKeyToAddress(key.GetPubKey());
+        string strAddress = PubKeyToAddress(key.GetPubKey());
 
         {
             printf("[WALLET] Rescanning blockchain for imported key %s\n", strAddress.c_str());
@@ -1374,10 +1575,22 @@ void CMainFrame::OnButtonNew(wxCommandEvent& event)
                 wxMessageBox(strprintf(_("Rescan complete. Found %d transaction(s).").mb_str(), nFound),
                     _("Import Private Key"), wxOK | wxICON_INFORMATION);
         }
-    }
 
-    SetAddressBookName(strAddress, strName);
-    SetDefaultReceivingAddress(strAddress);
+        SetAddressBookName(strAddress, strName);
+        SetDefaultReceivingAddress(strAddress);
+    }
+    else if (nChoice == 3)
+    {
+        CGetTextFromUserDialog dialog(this,
+            _STR("Import ok-Address Secret"),
+            _STR("ok-Address Secret (SK... format)"),
+            "",
+            _STR("Label (optional)"),
+            "");
+        if (!dialog.ShowModal())
+            return;
+        ImportOkAddressSecret(this, dialog.GetValue1(), dialog.GetValue2());
+    }
 }
 
 void CMainFrame::OnButtonCopy(wxCommandEvent& event)
@@ -1388,6 +1601,21 @@ void CMainFrame::OnButtonCopy(wxCommandEvent& event)
         wxTheClipboard->SetData(new wxTextDataObject(m_textCtrlAddress->GetValue()));
         wxTheClipboard->Close();
     }
+}
+
+void CMainFrame::OnButtonCopyOk(wxCommandEvent& event)
+{
+    if (wxTheClipboard->Open())
+    {
+        wxTheClipboard->SetData(new wxTextDataObject(m_textCtrlOkAddress->GetValue()));
+        wxTheClipboard->Close();
+    }
+}
+
+void CMainFrame::SetOkAddressIfEmpty(const string& strAddr)
+{
+    if (m_textCtrlOkAddress->GetValue().IsEmpty())
+        m_textCtrlOkAddress->SetValue(strAddr);
 }
 
 void CMainFrame::OnListItemActivated(wxListEvent& event)
@@ -1454,6 +1682,10 @@ CTxDetailsDialog::CTxDetailsDialog(wxWindow* parent, CWalletTx wtx) : CTxDetails
 
         strHTML += _STR("<b>Date:</b> ") + (nTime ? DateTimeStr(nTime) : "") + "<br>";
 
+        if (wtx.mapValue.count("stealth_address") && !wtx.mapValue["stealth_address"].empty())
+        {
+            strHTML += _STR("<b>ok-Address:</b> ") + HtmlEscape(wtx.mapValue["stealth_address"]) + "<br>";
+        }
 
         //
         // From
@@ -1484,7 +1716,6 @@ CTxDetailsDialog::CTxDetailsDialog(wxWindow* parent, CWalletTx wtx) : CTxDetails
                             string strAddress = PubKeyToAddress(vchPubKey);
                             if (mapAddressBook.count(strAddress))
                             {
-                                strHTML += string() + _STR("<b>From:</b> ") + _STR("unknown") + "<br>";
                                 strHTML += _STR("<b>To:</b> ");
                                 strHTML += HtmlEscape(strAddress);
                                 if (!mapAddressBook[strAddress].empty())
@@ -1549,7 +1780,11 @@ CTxDetailsDialog::CTxDetailsDialog(wxWindow* parent, CWalletTx wtx) : CTxDetails
 
             bool fAllToMe = true;
             foreach(const CTxOut& txout, wtx.vout)
+            {
+                if (txout.nValue == 0 && txout.scriptPubKey.size() > 0 && txout.scriptPubKey[0] == OP_RETURN)
+                    continue;
                 fAllToMe = fAllToMe && txout.IsMine();
+            }
 
             if (fAllFromMe)
             {
@@ -1561,18 +1796,27 @@ CTxDetailsDialog::CTxDetailsDialog(wxWindow* parent, CWalletTx wtx) : CTxDetails
                     if (txout.IsMine())
                         continue;
 
+                    if (txout.nValue == 0 && txout.scriptPubKey.size() > 0 && txout.scriptPubKey[0] == OP_RETURN)
+                        continue;
+
                     if (wtx.mapValue["to"].empty())
                     {
-                        // Offline transaction
-                        uint160 hash160;
-                        if (ExtractHash160(txout.scriptPubKey, hash160))
+                        if (wtx.mapValue.count("stealth_address") && !wtx.mapValue["stealth_address"].empty())
                         {
-                            string strAddress = Hash160ToAddress(hash160);
-                            strHTML += _STR("<b>To:</b> ");
-                            if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
-                                strHTML += mapAddressBook[strAddress] + " ";
-                            strHTML += strAddress;
-                            strHTML += "<br>";
+                            strHTML += _STR("<b>To ok-address:</b> ") + HtmlEscape(wtx.mapValue["stealth_address"]) + "<br>";
+                        }
+                        else
+                        {
+                            uint160 hash160;
+                            if (ExtractHash160(txout.scriptPubKey, hash160))
+                            {
+                                string strAddress = Hash160ToAddress(hash160);
+                                strHTML += _STR("<b>To:</b> ");
+                                if (mapAddressBook.count(strAddress) && !mapAddressBook[strAddress].empty())
+                                    strHTML += mapAddressBook[strAddress] + " ";
+                                strHTML += strAddress;
+                                strHTML += "<br>";
+                            }
                         }
                     }
 
@@ -1935,31 +2179,18 @@ CSendDialog::CSendDialog(wxWindow* parent, const wxString& strAddress) : CSendDi
         m_textCtrlAmount->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
         m_textCtrlAmount->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
     }
-    if (m_textCtrlFrom) {
-        m_textCtrlFrom->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
-        m_textCtrlFrom->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-    }
-    if (m_textCtrlMessage) {
-        m_textCtrlMessage->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
-        m_textCtrlMessage->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-    }
 #endif
-    // Init
     m_textCtrlAddress->SetValue(strAddress);
-    m_choiceTransferType->SetSelection(0);
     m_bitmapCheckMark->Show(false);
-    fEnabledPrev = true;
     m_textCtrlAddress->SetFocus();
-    //// todo: should add a display of your balance for convenience
 #ifndef __WXMSW__
     wxFont fontTmp = m_staticTextInstructions->GetFont();
     if (fontTmp.GetPointSize() > 9);
         fontTmp.SetPointSize(9);
     m_staticTextInstructions->SetFont(fontTmp);
-    SetSize(725, 380);
+    SetSize(725, 300);
 #endif
 
-    // Set Icon
     wxIcon iconSend;
     iconSend.CopyFromBitmap(wxBitmap(send16noshadow_xpm));
     SetIcon(iconSend);
@@ -1967,7 +2198,6 @@ CSendDialog::CSendDialog(wxWindow* parent, const wxString& strAddress) : CSendDi
     wxCommandEvent event;
     OnTextAddress(event);
 
-    // Fixup the tab order
     m_buttonPaste->MoveAfterInTabOrder(m_buttonCancel);
     m_buttonAddress->MoveAfterInTabOrder(m_buttonPaste);
     this->Layout();
@@ -1975,31 +2205,11 @@ CSendDialog::CSendDialog(wxWindow* parent, const wxString& strAddress) : CSendDi
 
 void CSendDialog::OnTextAddress(wxCommandEvent& event)
 {
-    // Check mark
     event.Skip();
-    bool fBitcoinAddress = IsValidBitcoinAddress(m_textCtrlAddress->GetValue());
-    m_bitmapCheckMark->Show(fBitcoinAddress);
-
-    // Grey out message if bitcoin address
-    bool fEnable = !fBitcoinAddress;
-    m_staticTextFrom->Enable(fEnable);
-    m_textCtrlFrom->Enable(fEnable);
-    m_staticTextMessage->Enable(fEnable);
-    m_textCtrlMessage->Enable(fEnable);
-    m_textCtrlMessage->SetBackgroundColour(wxSystemSettings::GetColour(fEnable ? wxSYS_COLOUR_WINDOW : wxSYS_COLOUR_BTNFACE));
-    if (!fEnable && fEnabledPrev)
-    {
-        strFromSave    = m_textCtrlFrom->GetValue();
-        strMessageSave = m_textCtrlMessage->GetValue();
-        m_textCtrlFrom->SetValue(_("Will appear as \"From: Unknown\""));
-        m_textCtrlMessage->SetValue(_("Can't include a message when sending to a Bitok address"));
-    }
-    else if (fEnable && !fEnabledPrev)
-    {
-        m_textCtrlFrom->SetValue(strFromSave);
-        m_textCtrlMessage->SetValue(strMessageSave);
-    }
-    fEnabledPrev = fEnable;
+    string strAddr = (string)m_textCtrlAddress->GetValue();
+    bool fBitcoinAddress = IsValidBitcoinAddress(strAddr);
+    bool fStealthAddress = (strAddr.size() > 2 && strAddr.substr(0, 2) == "ok");
+    m_bitmapCheckMark->Show(fBitcoinAddress || fStealthAddress);
 }
 
 void CSendDialog::OnKillFocusAmount(wxFocusEvent& event)
@@ -2041,7 +2251,6 @@ void CSendDialog::OnButtonSend(wxCommandEvent& event)
     CWalletTx wtx;
     string strAddress = (string)m_textCtrlAddress->GetValue();
 
-    // Parse amount
     int64 nValue = 0;
     if (!ParseMoney(m_textCtrlAmount->GetValue(), nValue) || nValue <= 0)
     {
@@ -2059,41 +2268,84 @@ void CSendDialog::OnButtonSend(wxCommandEvent& event)
         return;
     }
 
-    // Parse bitcoin address
-    uint160 hash160;
-    bool fBitcoinAddress = AddressToHash160(strAddress, hash160);
+    bool fStealthAddress = (strAddress.size() > 2 && strAddress.substr(0, 2) == "ok");
 
-    if (fBitcoinAddress)
+    if (fStealthAddress)
     {
-        // Send to bitcoin address
-        CScript scriptPubKey;
-        scriptPubKey << OP_DUP << OP_HASH160 << hash160 << OP_EQUALVERIFY << OP_CHECKSIG;
+        CStealthAddress sxAddr;
+        if (!sxAddr.SetEncoded(strAddress))
+        {
+            wxMessageBox(_("Invalid ok-address  "), _("Send Coins"));
+            return;
+        }
 
-        string strError = SendMoney(scriptPubKey, nValue, wtx, true);
-        if (strError == "")
-            wxMessageBox(_("Payment sent  "), _("Sending..."));
-        else if (strError != "ABORTED")
-            wxMessageBox(strError + "  ", _("Sending..."));
+        vector<unsigned char> vchEphemPub, vchDestPubKey, vchSharedSecret;
+        if (!StealthEphemeral(sxAddr, vchEphemPub, vchDestPubKey, vchSharedSecret))
+        {
+            wxMessageBox(_("Failed to derive stealth destination  "), _("Send Coins"));
+            return;
+        }
+
+        CScript scriptDestPubKey;
+        scriptDestPubKey.SetBitcoinAddress(vchDestPubKey);
+
+        vector<unsigned char> vchOpReturnData = BuildStealthOpReturn(vchEphemPub);
+        CScript scriptOpReturn;
+        scriptOpReturn << OP_RETURN << vchOpReturnData;
+
+        wtx.mapValue["stealth_address"] = strAddress;
+
+        CKey changeKey;
+        int64 nFeeRequired;
+
+        CRITICAL_BLOCK(cs_main)
+        {
+            if (!CreateStealthTransaction(scriptDestPubKey, scriptOpReturn, nValue, wtx, changeKey, nFeeRequired))
+            {
+                string strError;
+                if (nValue + nFeeRequired > GetBalance())
+                    strError = strprintf(_STR("This transaction requires a fee of %s").c_str(), FormatMoney(nFeeRequired).c_str());
+                else
+                    strError = _STR("Transaction creation failed");
+                wxMessageBox(strError + "  ", _("Send Coins"));
+                return;
+            }
+        }
+
+        if (!ThreadSafeAskFee(nFeeRequired, _STR("Sending..."), this))
+            return;
+
+        CRITICAL_BLOCK(cs_main)
+        {
+            if (!CommitTransaction(wtx, changeKey))
+            {
+                wxMessageBox(_("The transaction was rejected.  This might happen if some of the coins in your wallet were already spent, such as if you used a copy of wallet.dat and coins were spent in the copy but not marked as spent here."), _("Send Coins"));
+                return;
+            }
+        }
+        wxMessageBox(_("Payment sent  "), _("Sending..."));
     }
     else
     {
-        // Parse IP address
-        CAddress addr(strAddress);
-        if (!addr.IsValid())
+        uint160 hash160;
+        bool fBitcoinAddress = AddressToHash160(strAddress, hash160);
+
+        if (fBitcoinAddress)
+        {
+            CScript scriptPubKey;
+            scriptPubKey << OP_DUP << OP_HASH160 << hash160 << OP_EQUALVERIFY << OP_CHECKSIG;
+
+            string strError = SendMoney(scriptPubKey, nValue, wtx, true);
+            if (strError == "")
+                wxMessageBox(_("Payment sent  "), _("Sending..."));
+            else if (strError != "ABORTED")
+                wxMessageBox(strError + "  ", _("Sending..."));
+        }
+        else
         {
             wxMessageBox(_("Invalid address  "), _("Send Coins"));
             return;
         }
-
-        // Message
-        wtx.mapValue["to"] = strAddress;
-        wtx.mapValue["from"] = m_textCtrlFrom->GetValue();
-        wtx.mapValue["message"] = m_textCtrlMessage->GetValue();
-
-        // Send to IP address
-        CSendingDialog* pdialog = new CSendingDialog(this, addr, nValue, wtx);
-        if (!pdialog->ShowModal())
-            return;
     }
 
     CRITICAL_BLOCK(cs_mapAddressBook)
@@ -2493,6 +2745,13 @@ CAddressBookDialog::CAddressBookDialog(wxWindow* parent, const wxString& strInit
 #endif
     m_listCtrlReceiving->SetFocus();
 
+    m_listCtrlOkAddresses->InsertColumn(0, _("Label"), wxLIST_FORMAT_LEFT, 200);
+    m_listCtrlOkAddresses->InsertColumn(1, _("ok-Address"), wxLIST_FORMAT_LEFT, 350);
+#ifndef __WXMSW__
+    m_listCtrlOkAddresses->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
+    m_listCtrlOkAddresses->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOXTEXT));
+#endif
+
     // Fill listctrl with address book data
     CRITICAL_BLOCK(cs_mapKeys)
     CRITICAL_BLOCK(cs_mapAddressBook)
@@ -2510,10 +2769,22 @@ CAddressBookDialog::CAddressBookDialog(wxWindow* parent, const wxString& strInit
                 plistCtrl->SetItemState(nIndex, wxLIST_STATE_SELECTED|wxLIST_STATE_FOCUSED, wxLIST_STATE_SELECTED|wxLIST_STATE_FOCUSED);
         }
     }
+
+    CRITICAL_BLOCK(cs_stealthAddresses)
+    {
+        for (unsigned int i = 0; i < vStealthAddresses.size(); i++)
+        {
+            string strLabel = vStealthAddresses[i].label;
+            string strEncoded = vStealthAddresses[i].Encoded();
+            InsertLine(m_listCtrlOkAddresses, strLabel, strEncoded);
+        }
+    }
 }
 
 wxString CAddressBookDialog::GetSelectedAddress()
 {
+    if (nPage == OKADDRESSES)
+        return GetSelectedOkAddress();
     int nIndex = GetSelection(m_listCtrl);
     if (nIndex == -1)
         return "";
@@ -2536,6 +2807,14 @@ wxString CAddressBookDialog::GetSelectedReceivingAddress()
     return GetItemText(m_listCtrlReceiving, nIndex, 1);
 }
 
+wxString CAddressBookDialog::GetSelectedOkAddress()
+{
+    int nIndex = GetSelection(m_listCtrlOkAddresses);
+    if (nIndex == -1)
+        return "";
+    return GetItemText(m_listCtrlOkAddresses, nIndex, 1);
+}
+
 void CAddressBookDialog::OnNotebookPageChanged(wxNotebookEvent& event)
 {
     event.Skip();
@@ -2544,22 +2823,43 @@ void CAddressBookDialog::OnNotebookPageChanged(wxNotebookEvent& event)
         m_listCtrl = m_listCtrlSending;
     else if (nPage == RECEIVING)
         m_listCtrl = m_listCtrlReceiving;
+    else if (nPage == OKADDRESSES)
+        m_listCtrl = m_listCtrlOkAddresses;
     m_buttonDelete->Show(nPage == SENDING);
-    m_buttonCopy->Show(nPage == RECEIVING);
-    m_buttonExport->Show(nPage == RECEIVING);
+    m_buttonCopy->Show(nPage == RECEIVING || nPage == OKADDRESSES);
+    m_buttonExport->Show(nPage == RECEIVING || nPage == OKADDRESSES);
+    m_buttonNew->Show(true);
     this->Layout();
     m_listCtrl->SetFocus();
 }
 
 void CAddressBookDialog::OnListEndLabelEdit(wxListEvent& event)
 {
-    // Update address book with edited name
     event.Skip();
     if (event.IsEditCancelled())
         return;
     string strAddress = (string)GetItemText(m_listCtrl, event.GetIndex(), 1);
-    SetAddressBookName(strAddress, string(event.GetText()));
-    pframeMain->RefreshListCtrl();
+    string strNewName = (string)event.GetText();
+    if (nPage == OKADDRESSES)
+    {
+        CRITICAL_BLOCK(cs_stealthAddresses)
+        {
+            for (unsigned int i = 0; i < vStealthAddresses.size(); i++)
+            {
+                if (vStealthAddresses[i].Encoded() == strAddress)
+                {
+                    vStealthAddresses[i].label = strNewName;
+                    CWalletDB().WriteStealthAddress(vStealthAddresses[i]);
+                    break;
+                }
+            }
+        }
+    }
+    else
+    {
+        SetAddressBookName(strAddress, strNewName);
+        pframeMain->RefreshListCtrl();
+    }
 }
 
 void CAddressBookDialog::OnListItemSelected(wxListEvent& event)
@@ -2600,15 +2900,123 @@ void CAddressBookDialog::OnButtonDelete(wxCommandEvent& event)
 
 void CAddressBookDialog::OnButtonCopy(wxCommandEvent& event)
 {
+    wxString strAddr;
+    if (nPage == OKADDRESSES)
+        strAddr = GetSelectedOkAddress();
+    else
+        strAddr = GetSelectedAddress();
     if (wxTheClipboard->Open())
     {
-        wxTheClipboard->SetData(new wxTextDataObject(GetSelectedAddress()));
+        wxTheClipboard->SetData(new wxTextDataObject(strAddr));
         wxTheClipboard->Close();
     }
 }
 
 void CAddressBookDialog::OnButtonExport(wxCommandEvent& event)
 {
+    if (nPage == OKADDRESSES)
+    {
+        string strOkAddr = (string)GetSelectedOkAddress();
+        if (strOkAddr.empty())
+            return;
+
+        int nResult = wxMessageBox(
+            _("WARNING: Your ok-address secret controls access to all funds received via this ok-address.\n\n"
+              "Anyone who has this secret can spend your funds.\n"
+              "Never share it with anyone you do not trust.\n\n"
+              "Do you want to export the secret for this ok-address?"),
+            _("Export ok-Address Secret"),
+            wxYES_NO | wxICON_WARNING);
+        if (nResult != wxYES)
+            return;
+
+        vector<unsigned char> vchScanSecret;
+        vector<unsigned char> vchSpendSecret;
+        CRITICAL_BLOCK(cs_stealthAddresses)
+        {
+            for (unsigned int i = 0; i < vStealthAddresses.size(); i++)
+            {
+                if (vStealthAddresses[i].Encoded() == strOkAddr)
+                {
+                    CWalletDB walletdb("r");
+                    CPrivKey scanPriv, spendPriv;
+                    if (walletdb.ReadStealthScanKey(vStealthAddresses[i].scan_pubkey, scanPriv) &&
+                        walletdb.ReadStealthSpendKey(vStealthAddresses[i].spend_pubkey, spendPriv))
+                    {
+                        CKey scanKey, spendKey;
+                        scanKey.SetPrivKey(scanPriv);
+                        spendKey.SetPrivKey(spendPriv);
+                        vchScanSecret = scanKey.GetSecret();
+                        vchSpendSecret = spendKey.GetSecret();
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (vchScanSecret.empty() || vchSpendSecret.empty())
+        {
+            wxMessageBox(_("Failed to read secret keys for this ok-address."),
+                _("Export ok-Address Secret"), wxOK | wxICON_ERROR);
+            return;
+        }
+
+        string strSecret = EncodeStealthSecret(vchScanSecret, vchSpendSecret);
+
+        enum { ID_COPY_SECRET = 1002 };
+        wxDialog dlg(this, wxID_ANY, _("ok-Address Secret Exported"), wxDefaultPosition, wxDefaultSize);
+#ifndef __WXMSW__
+        dlg.SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+        dlg.SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
+#endif
+        wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
+        sizer->Add(new wxStaticText(&dlg, wxID_ANY,
+            _("Secret for ok-address:") + wxString(" ") + strOkAddr.substr(0, 24) + "..."),
+            0, wxALL, 10);
+        wxTextCtrl* txtKey = new wxTextCtrl(&dlg, wxID_ANY, strSecret,
+            wxDefaultPosition, wxDefaultSize, wxTE_READONLY);
+#ifndef __WXMSW__
+        txtKey->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        txtKey->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
+#endif
+        sizer->Add(txtKey, 0, wxEXPAND | wxLEFT | wxRIGHT, 10);
+        sizer->Add(new wxStaticText(&dlg, wxID_ANY,
+            _("Store this secret safely. Anyone with this secret can spend coins received via this ok-address.")),
+            0, wxALL, 10);
+
+        wxBoxSizer* btnSizer = new wxBoxSizer(wxHORIZONTAL);
+        wxButton* btnCopy = new wxButton(&dlg, ID_COPY_SECRET, _("&Copy to Clipboard"));
+        wxButton* btnOK = new wxButton(&dlg, wxID_OK, _("OK"));
+        btnSizer->Add(btnCopy, 0, wxALL | wxALIGN_CENTER_VERTICAL, 6);
+        btnSizer->Add(btnOK, 0, wxALL | wxALIGN_CENTER_VERTICAL, 6);
+        sizer->Add(btnSizer, 0, wxALIGN_CENTER | wxALL, 10);
+
+        dlg.SetSizer(sizer);
+        dlg.SetMinSize(wxSize(520, -1));
+        sizer->Fit(&dlg);
+        dlg.Centre();
+
+        dlg.Bind(wxEVT_COMMAND_BUTTON_CLICKED, [&](wxCommandEvent& evt) {
+            if (evt.GetId() == ID_COPY_SECRET)
+            {
+                if (wxTheClipboard->Open())
+                {
+                    wxTheClipboard->SetData(new wxTextDataObject(strSecret));
+                    wxTheClipboard->Close();
+                }
+                btnCopy->SetLabel(_("Copied!"));
+                btnCopy->Disable();
+            }
+            else
+            {
+                evt.Skip();
+            }
+        });
+
+        dlg.ShowModal();
+        return;
+    }
+
     if (nPage != RECEIVING)
         return;
     string strAddress = (string)GetSelectedReceivingAddress();
@@ -2733,7 +3141,6 @@ void CAddressBookDialog::OnButtonEdit(wxCommandEvent& event)
 
     if (nPage == SENDING)
     {
-        // Ask name and address
         do
         {
             CGetTextFromUserDialog dialog(this, _STR("Edit Address"), _STR("Name"), strName, _STR("Address"), strAddress);
@@ -2744,23 +3151,44 @@ void CAddressBookDialog::OnButtonEdit(wxCommandEvent& event)
         }
         while (CheckIfMine(strAddress, _STR("Edit Address")));
 
+        if (strAddress != strAddressOrg)
+            CWalletDB().EraseName(strAddressOrg);
+        SetAddressBookName(strAddress, strName);
+        m_listCtrl->SetItem(nIndex, 1, strAddress);
+        m_listCtrl->SetItemText(nIndex, strName);
+        pframeMain->RefreshListCtrl();
     }
     else if (nPage == RECEIVING)
     {
-        // Ask name
         CGetTextFromUserDialog dialog(this, _STR("Edit Address Label"), _STR("Label"), strName);
         if (!dialog.ShowModal())
             return;
         strName = dialog.GetValue();
+        SetAddressBookName(strAddress, strName);
+        m_listCtrl->SetItem(nIndex, 1, strAddress);
+        m_listCtrl->SetItemText(nIndex, strName);
+        pframeMain->RefreshListCtrl();
     }
-
-    // Write back
-    if (strAddress != strAddressOrg)
-        CWalletDB().EraseName(strAddressOrg);
-    SetAddressBookName(strAddress, strName);
-    m_listCtrl->SetItem(nIndex, 1, strAddress);
-    m_listCtrl->SetItemText(nIndex, strName);
-    pframeMain->RefreshListCtrl();
+    else if (nPage == OKADDRESSES)
+    {
+        CGetTextFromUserDialog dialog(this, _STR("Edit ok-Address Label"), _STR("Label"), strName);
+        if (!dialog.ShowModal())
+            return;
+        strName = dialog.GetValue();
+        CRITICAL_BLOCK(cs_stealthAddresses)
+        {
+            for (unsigned int i = 0; i < vStealthAddresses.size(); i++)
+            {
+                if (vStealthAddresses[i].Encoded() == strAddress)
+                {
+                    vStealthAddresses[i].label = strName;
+                    CWalletDB().WriteStealthAddress(vStealthAddresses[i]);
+                    break;
+                }
+            }
+        }
+        m_listCtrl->SetItemText(nIndex, strName);
+    }
 }
 
 void CAddressBookDialog::OnButtonNew(wxCommandEvent& event)
@@ -2858,6 +3286,61 @@ void CAddressBookDialog::OnButtonNew(wxCommandEvent& event)
             }
         }
     }
+    else if (nPage == OKADDRESSES)
+    {
+        wxArrayString choices;
+        choices.Add(_("Create New ok-Address"));
+        choices.Add(_("Import ok-Address Secret"));
+        wxSingleChoiceDialog choiceDlg(this,
+            _("What would you like to do?"),
+            _("New ok-Address"),
+            choices);
+        choiceDlg.SetSelection(0);
+        if (choiceDlg.ShowModal() != wxID_OK)
+            return;
+
+        if (choiceDlg.GetSelection() == 0)
+        {
+            CGetTextFromUserDialog dialog(this,
+                _STR("New ok-Address"),
+                _STR("Label"),
+                "");
+            if (!dialog.ShowModal())
+                return;
+            strName = dialog.GetValue();
+            if (!CreateNewOkAddress(this, strName))
+                return;
+            CRITICAL_BLOCK(cs_stealthAddresses)
+            {
+                if (!vStealthAddresses.empty())
+                    strAddress = vStealthAddresses.back().Encoded();
+            }
+        }
+        else
+        {
+            CGetTextFromUserDialog dialog(this,
+                _STR("Import ok-Address Secret"),
+                _STR("ok-Address Secret (SK... format)"),
+                "",
+                _STR("Label (optional)"),
+                "");
+            if (!dialog.ShowModal())
+                return;
+            strName = dialog.GetValue2();
+            if (!ImportOkAddressSecret(this, dialog.GetValue1(), strName))
+                return;
+            CRITICAL_BLOCK(cs_stealthAddresses)
+            {
+                if (!vStealthAddresses.empty())
+                    strAddress = vStealthAddresses.back().Encoded();
+            }
+        }
+
+        int nIndex = InsertLine(m_listCtrl, strName, strAddress);
+        SetSelection(m_listCtrl, nIndex);
+        m_listCtrl->SetFocus();
+        return;
+    }
 
     // Add to list and select it
     SetAddressBookName(strAddress, strName);
@@ -2870,9 +3353,17 @@ void CAddressBookDialog::OnButtonNew(wxCommandEvent& event)
 
 void CAddressBookDialog::OnButtonOK(wxCommandEvent& event)
 {
-    // OK
     if (nPage == RECEIVING && !fDuringSend)
         SetDefaultReceivingAddress((string)GetSelectedReceivingAddress());
+    if (nPage == OKADDRESSES)
+    {
+        wxString strOk = GetSelectedOkAddress();
+        if (!strOk.empty() && fDuringSend)
+        {
+            EndModal(2);
+            return;
+        }
+    }
     EndModal(GetSelectedAddress() != "" ? 1 : 0);
 }
 

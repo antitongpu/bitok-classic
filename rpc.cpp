@@ -1026,6 +1026,9 @@ Value listtransactions(const Array& params, bool fHelp)
                         if (txout.IsMine())
                             continue;
 
+                        if (txout.nValue == 0 && txout.scriptPubKey.size() > 0 && txout.scriptPubKey[0] == OP_RETURN)
+                            continue;
+
                         string strAddress;
                         ExtractAddress(txout.scriptPubKey, strAddress);
 
@@ -1036,6 +1039,8 @@ Value listtransactions(const Array& params, bool fHelp)
                         entry.push_back(Pair("fee", (double)(-nFee) / (double)COIN));
                         if (!strAddress.empty())
                             entry.push_back(Pair("address", strAddress));
+                        if (wtx.mapValue.count("stealth_address") && !wtx.mapValue.find("stealth_address")->second.empty())
+                            entry.push_back(Pair("stealth_address", wtx.mapValue.find("stealth_address")->second));
                         entry.push_back(Pair("confirmations", nDepth));
                         entry.push_back(Pair("time", (boost::int64_t)nTime));
                         ret.push_back(entry);

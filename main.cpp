@@ -317,6 +317,12 @@ bool AddToWallet(const CWalletTx& wtxIn)
                 wtx.fSpent = wtxIn.fSpent;
                 fUpdated = true;
             }
+            if (wtxIn.mapValue.count("stealth_address") && !wtxIn.mapValue.find("stealth_address")->second.empty()
+                && wtx.mapValue["stealth_address"].empty())
+            {
+                wtx.mapValue["stealth_address"] = wtxIn.mapValue.find("stealth_address")->second;
+                fUpdated = true;
+            }
         }
 
         if (fDebug)
@@ -349,8 +355,9 @@ bool AddToWallet(const CWalletTx& wtxIn)
     return true;
 }
 
-bool CheckStealthTransaction(const CTransaction& tx)
+bool CheckStealthTransaction(const CTransaction& tx, string& strStealthAddrOut)
 {
+    strStealthAddrOut.clear();
     vector<unsigned char> vchEphemPub;
     bool fFoundEphem = false;
 
@@ -418,6 +425,8 @@ bool CheckStealthTransaction(const CTransaction& tx)
                     mapStealthDestToScan[vchDestPubKey] = make_pair(sxAddr.scan_pubkey, vchEphemPub);
                     walletdb.WriteStealthDestMap(vchDestPubKey, make_pair(sxAddr.scan_pubkey, vchEphemPub));
 
+                    strStealthAddrOut = sxAddr.Encoded();
+
                     printf("stealth: found payment to stealth address %s (dest=%s)\n",
                            sxAddr.Encoded().substr(0, 16).c_str(),
                            PubKeyToAddress(vchDestPubKey).c_str());
@@ -433,11 +442,14 @@ bool CheckStealthTransaction(const CTransaction& tx)
 
 bool AddToWalletIfMine(const CTransaction& tx, const CBlock* pblock)
 {
-    CheckStealthTransaction(tx);
+    string strStealthAddr;
+    CheckStealthTransaction(tx, strStealthAddr);
 
     if (tx.IsMine() || mapWallet.count(tx.GetHash()))
     {
         CWalletTx wtx(tx);
+        if (!strStealthAddr.empty())
+            wtx.mapValue["stealth_address"] = strStealthAddr;
         if (pblock)
             wtx.SetMerkleBranch(pblock);
         return AddToWallet(wtx);

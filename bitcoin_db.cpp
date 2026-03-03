@@ -1468,12 +1468,33 @@ bool CWalletDB::LoadWallet()
             }
             else if (strType == "sxaddr")
             {
+                vector<unsigned char> vchScanPub;
+                ssKey >> vchScanPub;
                 CStealthAddress sxAddr;
                 ssValue >> sxAddr;
                 CRITICAL_BLOCK(cs_stealthAddresses)
                 {
                     vStealthAddresses.push_back(sxAddr);
                 }
+            }
+            else if (strType == "sxchgidx")
+            {
+                vector<unsigned char> vchSpendPub;
+                ssKey >> vchSpendPub;
+                uint32_t nIndex;
+                ssValue >> nIndex;
+                CRITICAL_BLOCK(cs_stealthAddresses)
+                {
+                    mapStealthChangeIndex[vchSpendPub] = nIndex;
+                }
+            }
+            else if (strType == "sxdest")
+            {
+                vector<unsigned char> vchDestPub;
+                ssKey >> vchDestPub;
+                pair<vector<unsigned char>, vector<unsigned char> > scanAndEphem;
+                ssValue >> scanAndEphem;
+                mapStealthDestToScan[vchDestPub] = scanAndEphem;
             }
         }
         pcursor->close();
@@ -1487,6 +1508,7 @@ bool CWalletDB::LoadWallet()
     printf("fMinimizeOnClose = %d\n", fMinimizeOnClose);
     printf("fUseProxy = %d\n", fUseProxy);
     printf("addrProxy = %s\n", addrProxy.ToString().c_str());
+    printf("stealth addresses loaded = %d\n", (int)vStealthAddresses.size());
 
 
     // The transaction fee setting won't be needed for many years to come.
@@ -1533,6 +1555,43 @@ bool LoadWallet(bool& fFirstRunRet)
         if (!SetAddressBookName(PubKeyToAddress(keyUser.GetPubKey()), "Your Address"))
             return false;
         CWalletDB().WriteDefaultKey(keyUser.GetPubKey());
+    }
+
+    CRITICAL_BLOCK(cs_stealthAddresses)
+    {
+        bool fHasDefault = false;
+        for (unsigned int i = 0; i < vStealthAddresses.size(); i++)
+        {
+            if (vStealthAddresses[i].label == "default")
+            {
+                fHasDefault = true;
+                break;
+            }
+        }
+
+        if (vStealthAddresses.empty())
+        {
+            CStealthAddress sxAddr;
+            CKey scanKey, spendKey;
+            if (GenerateStealthAddress(sxAddr, scanKey, spendKey))
+            {
+                sxAddr.label = "default";
+                CWalletDB walletdb;
+                walletdb.WriteStealthAddress(sxAddr);
+                walletdb.WriteStealthScanKey(sxAddr.scan_pubkey, scanKey.GetPrivKey());
+                walletdb.WriteStealthSpendKey(sxAddr.spend_pubkey, spendKey.GetPrivKey());
+                vStealthAddresses.push_back(sxAddr);
+                printf("stealth: created default ok-address %s\n",
+                       sxAddr.Encoded().substr(0, 24).c_str());
+            }
+        }
+        else if (!fHasDefault)
+        {
+            vStealthAddresses[0].label = "default";
+            CWalletDB().WriteStealthAddress(vStealthAddresses[0]);
+            printf("stealth: assigned 'default' label to ok-address %s\n",
+                   vStealthAddresses[0].Encoded().substr(0, 24).c_str());
+        }
     }
 
     CreateThread(ThreadFlushWalletDB, NULL);
