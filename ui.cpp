@@ -1974,7 +1974,7 @@ COptionsDialog::COptionsDialog(wxWindow* parent) : COptionsDialogBase(parent)
     m_spinCtrlLimitProcessors->Enable(fLimitProcessors);
 
     // Update label to show detected CPU count
-    m_staticText35->SetLabel(wxString::Format(_("processors (detected: %d)"), nProcessors));
+    m_staticText35->SetLabel(wxString::Format(_("processors (max: %d)"), nProcessors));
     m_checkBoxStartOnSystemStartup->SetValue(fTmpStartOnSystemStartup = GetStartOnSystemStartup());
     m_checkBoxMinimizeToTray->SetValue(fMinimizeToTray);
     m_checkBoxMinimizeOnClose->SetValue(fMinimizeOnClose);
@@ -2123,6 +2123,10 @@ CAboutDialog::CAboutDialog(wxWindow* parent) : CAboutDialogBase(parent)
 #ifndef __WXMSW__
     SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
     SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
+    wxColour textColour = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+    m_staticText40->SetForegroundColour(textColour);
+    m_staticTextVersion->SetForegroundColour(textColour);
+    m_staticTextMain->SetForegroundColour(textColour);
 #endif
     m_staticTextVersion->SetLabel(strprintf(_STR("version %d.%d.%d beta").c_str(), VERSION/10000, (VERSION/100)%100, VERSION%100));
 
@@ -2134,16 +2138,16 @@ CAboutDialog::CAboutDialog(wxWindow* parent) : CAboutDialogBase(parent)
     str.Replace("(c)", "\xA9");
 #endif
     m_staticTextMain->SetLabel(str);
+    m_staticTextMain->Wrap( 380 );
 #ifndef __WXMSW__
-    // Resize on Linux to make the window fit the text.
-    // The text was wrapped manually rather than using the Wrap setting because
-    // the wrap would be too small on Linux and it can't be changed at this point.
     wxFont fontTmp = m_staticTextMain->GetFont();
-    if (fontTmp.GetPointSize() > 8);
+    if (fontTmp.GetPointSize() > 8)
         fontTmp.SetPointSize(8);
     m_staticTextMain->SetFont(fontTmp);
+    m_staticTextMain->Wrap( 380 );
     SetSize(GetSize().GetWidth() + 44, GetSize().GetHeight() + 10);
 #endif
+    GetSizer()->Layout();
 }
 
 void CAboutDialog::OnClose(wxCloseEvent& event)

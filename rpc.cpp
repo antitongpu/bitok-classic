@@ -73,8 +73,12 @@ Value help(const Array& params, bool fHelp)
             "List commands.");
 
     string strRet;
+    set<rpcfn_type> setSeen;
     for (map<string, rpcfn_type>::iterator mi = mapCallTable.begin(); mi != mapCallTable.end(); ++mi)
     {
+        if (setSeen.count((*mi).second))
+            continue;
+        setSeen.insert((*mi).second);
         try
         {
             Array params;

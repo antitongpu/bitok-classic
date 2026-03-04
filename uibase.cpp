@@ -351,12 +351,12 @@ CTxDetailsDialogBase::~CTxDetailsDialogBase()
 
 COptionsDialogBase::COptionsDialogBase( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxDialog( parent, id, title, pos, size, style )
 {
-	this->SetSizeHints( wxSize( 500,320 ), wxDefaultSize );
+	this->SetSizeHints( wxSize( 680,460 ), wxDefaultSize );
 
 	wxBoxSizer* bSizer55;
 	bSizer55 = new wxBoxSizer( wxHORIZONTAL );
 
-	m_listBox = new wxListBox( this, wxID_ANY, wxDefaultPosition, wxSize( 140,-1 ), 0, NULL, 0 );
+	m_listBox = new wxListBox( this, wxID_ANY, wxDefaultPosition, wxSize( 120,-1 ), 0, NULL, 0 );
 	bSizer55->Add( m_listBox, 0, wxEXPAND|wxTOP|wxBOTTOM|wxLEFT, 8 );
 
 	m_scrolledWindow = new wxScrolledWindow( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0 );
@@ -397,7 +397,7 @@ COptionsDialogBase::COptionsDialogBase( wxWindow* parent, wxWindowID id, const w
 
 	bSizer71->Add( m_checkBoxLimitProcessors, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
 
-	m_spinCtrlLimitProcessors = new wxSpinCtrl( m_panelMain, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( 48,-1 ), wxSP_ARROW_KEYS, 1, 999, 1 );
+	m_spinCtrlLimitProcessors = new wxSpinCtrl( m_panelMain, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( 110,-1 ), wxSP_ARROW_KEYS, 1, 999, 1 );
 	bSizer71->Add( m_spinCtrlLimitProcessors, 0, wxALIGN_CENTER_VERTICAL, 5 );
 
 	m_staticText35 = new wxStaticText( m_panelMain, wxID_ANY, _("processors"), wxDefaultPosition, wxDefaultSize, 0 );
@@ -474,12 +474,13 @@ COptionsDialogBase::COptionsDialogBase( wxWindow* parent, wxWindowID id, const w
 	bSizer68->Fit( m_scrolledWindow );
 	bSizer55->Add( m_scrolledWindow, 1, wxEXPAND|wxALL, 5 );
 
-	this->SetSizer( bSizer55 );
-	this->Layout();
+	wxBoxSizer* bSizerOuter;
+	bSizerOuter = new wxBoxSizer( wxVERTICAL );
+
+	bSizerOuter->Add( bSizer55, 1, wxEXPAND, 0 );
 
 	wxBoxSizer* bSizer56;
 	bSizer56 = new wxBoxSizer( wxHORIZONTAL );
-
 
 	bSizer56->Add( 0, 0, 1, wxEXPAND, 5 );
 
@@ -492,7 +493,10 @@ COptionsDialogBase::COptionsDialogBase( wxWindow* parent, wxWindowID id, const w
 	m_buttonApply = new wxButton( this, wxID_APPLY, _("&Apply"), wxDefaultPosition, wxSize( 90,32 ), 0 );
 	bSizer56->Add( m_buttonApply, 0, wxALL, 5 );
 
-	bSizer55->Add( bSizer56, 0, wxEXPAND, 5 );
+	bSizerOuter->Add( bSizer56, 0, wxEXPAND|wxBOTTOM, 4 );
+
+	this->SetSizer( bSizerOuter );
+	this->Layout();
 
 	// Connect Events
 	this->Connect( wxEVT_CLOSE_WINDOW, wxCloseEventHandler( COptionsDialogBase::OnClose ) );
@@ -526,34 +530,49 @@ COptionsDialogBase::~COptionsDialogBase()
 
 CAboutDialogBase::CAboutDialogBase( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : wxDialog( parent, id, title, pos, size, style )
 {
-	this->SetSizeHints( wxSize( 480,400 ), wxDefaultSize );
+	this->SetSizeHints( wxSize( 580,460 ), wxDefaultSize );
 
-	wxBoxSizer* bSizer60;
-	bSizer60 = new wxBoxSizer( wxVERTICAL );
+	wxBoxSizer* bSizerOuter;
+	bSizerOuter = new wxBoxSizer( wxVERTICAL );
 
-	bSizer60->Add( 0, 2, 0, wxEXPAND, 5 );
+	bSizerOuter->Add( 0, 10, 0, wxEXPAND, 5 );
 
-	m_bitmap = new wxStaticBitmap( this, wxID_ANY, wxBitmap( about_xpm ), wxDefaultPosition, wxDefaultSize, 0 );
-	bSizer60->Add( m_bitmap, 0, wxALL|wxALIGN_CENTER_HORIZONTAL, 5 );
+	wxBoxSizer* bSizerContent;
+	bSizerContent = new wxBoxSizer( wxHORIZONTAL );
 
-	m_staticText40 = new wxStaticText( this, wxID_ANY, _("Bitok"), wxDefaultPosition, wxDefaultSize, 0 );
+	wxBitmap aboutBmp( about_xpm );
+	if ( aboutBmp.GetWidth() > 1 && aboutBmp.GetHeight() > 1 )
+	{
+		m_bitmap = new wxStaticBitmap( this, wxID_ANY, aboutBmp, wxDefaultPosition, wxDefaultSize, 0 );
+		bSizerContent->Add( m_bitmap, 0, wxALL|wxALIGN_TOP, 15 );
+	}
+	else
+	{
+		m_bitmap = NULL;
+	}
+
+	wxBoxSizer* bSizerText;
+	bSizerText = new wxBoxSizer( wxVERTICAL );
+
+	m_staticText40 = new wxStaticText( this, wxID_ANY, _("\nBitok"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticText40->Wrap( -1 );
-	m_staticText40->SetFont( wxFont( 12, 70, 90, 92, false, wxEmptyString ) );
+	m_staticText40->SetFont( wxFont( 14, 70, 90, 92, false, wxEmptyString ) );
 
-	bSizer60->Add( m_staticText40, 0, wxALIGN_CENTER_HORIZONTAL|wxTOP|wxRIGHT|wxLEFT, 5 );
+	bSizerText->Add( m_staticText40, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 
 	m_staticTextVersion = new wxStaticText( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticTextVersion->Wrap( -1 );
-	bSizer60->Add( m_staticTextVersion, 0, wxALIGN_CENTER_HORIZONTAL|wxTOP|wxRIGHT|wxLEFT, 5 );
+	bSizerText->Add( m_staticTextVersion, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 
-	bSizer60->Add( 0, 6, 0, wxEXPAND, 5 );
+	bSizerText->Add( 0, 8, 0, wxEXPAND, 5 );
 
-	m_staticTextMain = new wxStaticText( this, wxID_ANY, _("Copyright (c) 2009-2010 Satoshi Nakamoto\nCopyright (c) 2024-2025 Tom Elvis Jedusor\n\nThis is experimental software.\n\nDistributed under the MIT/X11 software license, see the accompanying file \nlicense.txt or http://www.opensource.org/licenses/mit-license.php.\n\nThis product includes software developed by the OpenSSL Project for use in \nthe OpenSSL Toolkit (http://www.openssl.org/) and cryptographic software \nwritten by Eric Young (eay@cryptsoft.com)."), wxDefaultPosition, wxDefaultSize, 0 );
-	m_staticTextMain->Wrap( -1 );
-	bSizer60->Add( m_staticTextMain, 0, wxALL, 10 );
+	m_staticTextMain = new wxStaticText( this, wxID_ANY, _("Copyright (c) 2009-2010 Satoshi Nakamoto\nCopyright (c) 2024-2026 Tom Elvis Jedusor\n\nThis is experimental software.\n\nDistributed under the MIT/X11 software license, see the accompanying file license.txt or http://www.opensource.org/licenses/mit-license.php.\n\nThis product includes software developed by the OpenSSL Project for use in \nthe OpenSSL Toolkit (http://www.openssl.org/) and cryptographic software \nwritten by Eric Young (eay@cryptsoft.com)."), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticTextMain->Wrap( 380 );
+	bSizerText->Add( m_staticTextMain, 1, wxALL|wxEXPAND, 5 );
 
+	bSizerContent->Add( bSizerText, 1, wxEXPAND, 5 );
 
-	bSizer60->Add( 0, 0, 1, wxEXPAND, 5 );
+	bSizerOuter->Add( bSizerContent, 1, wxEXPAND|wxRIGHT|wxLEFT, 5 );
 
 	wxBoxSizer* bSizer61;
 	bSizer61 = new wxBoxSizer( wxHORIZONTAL );
@@ -564,9 +583,9 @@ CAboutDialogBase::CAboutDialogBase( wxWindow* parent, wxWindowID id, const wxStr
 	m_buttonOK->SetDefault();
 	bSizer61->Add( m_buttonOK, 0, wxALL, 5 );
 
-	bSizer60->Add( bSizer61, 0, wxEXPAND, 5 );
+	bSizerOuter->Add( bSizer61, 0, wxEXPAND|wxBOTTOM, 5 );
 
-	this->SetSizer( bSizer60 );
+	this->SetSizer( bSizerOuter );
 	this->Layout();
 
 	// Connect Events

@@ -216,7 +216,7 @@ class COptionsDialogBase : public wxDialog
 
 
 	public:
-		COptionsDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Options"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 600,420 ), long style = wxDEFAULT_DIALOG_STYLE );
+		COptionsDialogBase( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Options"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 680,460 ), long style = wxDEFAULT_DIALOG_STYLE );
 		~COptionsDialogBase();
 
 };
