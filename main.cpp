@@ -2433,7 +2433,7 @@ bool AlreadyHave(CTxDB& txdb, const CInv& inv)
 {
     switch (inv.type)
     {
-    case MSG_TX:             return mapTransactions.count(inv.hash) || txdb.ContainsTx(inv.hash);
+    case MSG_TX:             return mapTransactions.count(inv.hash) || mapOrphanTransactions.count(inv.hash) || txdb.ContainsTx(inv.hash);
     case MSG_BLOCK:
     case MSG_FILTERED_BLOCK: return mapBlockIndex.count(inv.hash) || mapOrphanBlocks.count(inv.hash);
     }

@@ -1328,6 +1328,94 @@ Value getrawmempool(const Array& params, bool fHelp)
 }
 
 
+Value gettxout(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() < 2 || params.size() > 3)
+        throw runtime_error(
+            "gettxout <txid> <n> [includemempool=true]\n"
+            "Returns details about an unspent transaction output.");
+
+    string strTxid = params[0].get_str();
+    uint256 hash;
+    hash.SetHex(strTxid);
+    int nOutput = params[1].get_int();
+    bool fMempool = true;
+    if (params.size() > 2)
+        fMempool = params[2].get_bool();
+
+    CTransaction tx;
+    CTxIndex txindex;
+    bool fFoundInMempool = false;
+
+    if (fMempool)
+    {
+        CRITICAL_BLOCK(cs_mapTransactions)
+        {
+            if (mapTransactions.count(hash))
+            {
+                tx = mapTransactions[hash];
+                fFoundInMempool = true;
+            }
+        }
+    }
+
+    if (!fFoundInMempool)
+    {
+        CTxDB txdb("r");
+        if (!txdb.ReadDiskTx(hash, tx, txindex))
+            return Value::null;
+
+        if (nOutput < 0 || nOutput >= (int)txindex.vSpent.size())
+            return Value::null;
+
+        if (!txindex.vSpent[nOutput].IsNull())
+            return Value::null;
+    }
+
+    if (nOutput < 0 || nOutput >= (int)tx.vout.size())
+        return Value::null;
+
+    const CTxOut& txout = tx.vout[nOutput];
+
+    Object result;
+    result.push_back(Pair("bestblock", hashBestChain.ToString()));
+    result.push_back(Pair("value", (double)txout.nValue / (double)COIN));
+    result.push_back(Pair("scriptPubKey", HexStr(txout.scriptPubKey.begin(), txout.scriptPubKey.end(), false)));
+
+    string strAddress;
+    if (ExtractAddress(txout.scriptPubKey, strAddress))
+        result.push_back(Pair("address", strAddress));
+
+    if (fFoundInMempool)
+    {
+        result.push_back(Pair("confirmations", 0));
+    }
+    else if (!txindex.pos.IsNull())
+    {
+        CRITICAL_BLOCK(cs_main)
+        {
+            for (auto mi = mapBlockIndex.begin(); mi != mapBlockIndex.end(); ++mi)
+            {
+                CBlockIndex* pindex = mi->second;
+                if (pindex->nFile == txindex.pos.nFile && pindex->nBlockPos == txindex.pos.nBlockPos)
+                {
+                    result.push_back(Pair("height", pindex->nHeight));
+                    if (pindex->IsInMainChain())
+                        result.push_back(Pair("confirmations", nBestHeight - pindex->nHeight + 1));
+                    else
+                        result.push_back(Pair("confirmations", 0));
+                    break;
+                }
+            }
+        }
+    }
+
+    result.push_back(Pair("coinbase", tx.IsCoinBase()));
+
+    return result;
+}
+
+
 Value listunspent(const Array& params, bool fHelp)
 {
     if (fHelp || params.size() > 2)
@@ -4118,6 +4206,7 @@ pair<string, rpcfn_type> pCallTable[] =
     make_pair("gettransaction",        &gettransaction),
     make_pair("getrawtransaction",     &getrawtransaction),
     make_pair("getrawmempool",         &getrawmempool),
+    make_pair("gettxout",              &gettxout),
     make_pair("validateaddress",       &validateaddress),
     make_pair("getconnectioncount",    &getconnectioncount),
     make_pair("getpeerinfo",           &getpeerinfo),
@@ -4661,6 +4750,8 @@ int CommandLineRPC(int argc, char *argv[])
             //
             if (strMethod == "getblockhash"           && n > 0) ConvertTo<boost::int64_t>(params[0]);
             if (strMethod == "getrawtransaction"      && n > 1) ConvertTo<boost::int64_t>(params[1]);
+            if (strMethod == "gettxout"               && n > 1) ConvertTo<boost::int64_t>(params[1]);
+            if (strMethod == "gettxout"               && n > 2) ConvertTo<bool>(params[2]);
             if (strMethod == "setgenerate"            && n > 0) ConvertTo<bool>(params[0]);
             if (strMethod == "setgenerate"            && n > 1) ConvertTo<boost::int64_t>(params[1]);
             if (strMethod == "sendtoaddress"          && n > 1) ConvertTo<double>(params[1]);
