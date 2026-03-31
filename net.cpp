@@ -868,9 +868,9 @@ void ThreadSocketHandler2(void* parg)
 
 // Bitok: DNS seeds for reliable network bootstrap
 static const char* pszDNSSeeds[] = {
-    "seed1.bitokd.run",
-    "seed2.bitokd.run",
-    "seed3.bitokd.run",
+    "seed1.lastbitcoin.org ",
+    "seed2.lastbitcoin.org ",
+    "seed3.lastbitcoin.org ",
     NULL
 };
 

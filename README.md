@@ -134,7 +134,7 @@ server=1
 rpcuser=user
 rpcpassword=pass
 gen=0
-addnode=seed1.bitokd.run
+addnode=seed1.lastbitcoin.org 
 ```
 
 For web clients:
@@ -169,9 +169,9 @@ Full build instructions for each platform are in docs/.
 ## DNS Seeds
 
 ```
-seed1.bitokd.run
-seed2.bitokd.run
-seed3.bitokd.run
+seed1.lastbitcoin.org 
+seed2.lastbitcoin.org 
+seed3.lastbitcoin.org 
 ```
 
 Manual peer:
